@@ -2,21 +2,18 @@ name: Sisense build chain
 
 on:
   schedule:
-    # Run every hour at minute 0 (UTC).
-    # Change this cron expression if you want a different schedule.
-    - cron: "0 * * * *"
-
-  # Allow manual runs from the Actions UI for testing.
+    - cron: "0 * * * *"   # still runs every hour
   workflow_dispatch: {}
 
-# Prevent overlapping runs.
-# Only one Sisense build chain is allowed to run at a time.
 concurrency:
   group: sisense-build-chain
   cancel-in-progress: false
 
 jobs:
   sisense-build:
+    # 👇 if MAINTENANCE_MODE == 'true' → skip the whole job
+    if: ${{ secrets.MAINTENANCE_MODE != 'true' }}
+
     runs-on: ubuntu-latest
 
     steps:
