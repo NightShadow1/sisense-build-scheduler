@@ -109,22 +109,28 @@ def wait_for_build(token: str, build_id: str) -> str:
     We NEVER raise here; instead, we return a status string.
 
     Logic:
-    - Certain statuses are considered "in progress" (RUNNING, QUEUED, etc.).
-    - Anything else is treated as a final status and returned.
+    - Certain statuses are considered *final* (SUCCEEDED, FAILED, CANCELLED, etc.).
+    - Anything else is treated as "still in progress" and we keep polling.
     """
+
     url = f"{BASE_URL}/api/v2/builds/{build_id}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
     }
 
-    in_progress_statuses = {
-        "QUEUED",
-        "PENDING",
-        "RUNNING",
-        "IN_PROGRESS",
-        "STARTED",
-        "SCHEDULED",
+    # Statuses that mean the build is finished one way or another
+    final_statuses = {
+        "SUCCEEDED",
+        "SUCCESS",
+        "FAILED",
+        "FAILURE",
+        "CANCELLED",
+        "CANCELED",
+        "DONE",
+        "COMPLETED",
+        "ERROR",
+        "TIMEOUT",
     }
 
     deadline = time.time() + BUILD_TIMEOUT_MINUTES * 60
@@ -132,22 +138,27 @@ def wait_for_build(token: str, build_id: str) -> str:
     while True:
         try:
             resp = requests.get(url, headers=headers)
-            if resp.status_code >= 300:
+
+            # Handle race condition: sometimes the build record might not be ready yet
+            if resp.status_code == 404:
+                # Treat as still in progress (build just started), unless we hit timeout
+                print(f"  Build {build_id}: 404 Not Found yet, retrying...")
+            elif resp.status_code >= 300:
                 print(f"  Error checking build {build_id}: {resp.status_code} {resp.text}")
                 return "ERROR_HTTP"
+            else:
+                data = resp.json()
+                raw_status = data.get("status") or data.get("state") or "UNKNOWN"
+                status = str(raw_status).upper()
+                print(f"  Build {build_id} status (raw='{raw_status}', normalized='{status}')")
 
-            data = resp.json()
+                # If the status is one of the known final ones, we're done
+                if status in final_statuses:
+                    return status
+
         except Exception as e:
             print(f"  Exception checking build {build_id}: {e}")
             return "ERROR_EXCEPTION"
-
-        raw_status = data.get("status") or data.get("state") or "UNKNOWN"
-        status = str(raw_status).upper()
-        print(f"  Build {build_id} status (raw='{raw_status}', normalized='{status}')")
-
-        # If status is not one of the "in progress" values, treat it as final.
-        if status not in in_progress_statuses:
-            return status  # could be SUCCEEDED, FAILED, CANCELLED, SUCCESS, COMPLETED, etc.
 
         if time.time() > deadline:
             print(f"  Build {build_id} timed out after {BUILD_TIMEOUT_MINUTES} minutes.")
