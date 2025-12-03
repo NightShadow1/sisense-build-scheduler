@@ -1,0 +1,31 @@
+name: Sisense cube build
+
+on:
+  schedule:
+    # Every 15 minutes (UTC): 0,15,30,45
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}   # allow manual run from the UI for testing
+
+jobs:
+  trigger-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Trigger Sisense build
+        run: python sisense_trigger_build.py
+        env:
+          SISENSE_USER: ${{ secrets.SISENSE_USER }}
+          SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
