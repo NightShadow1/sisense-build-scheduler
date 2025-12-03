@@ -2,11 +2,18 @@ name: Sisense build chain
 
 on:
   schedule:
-    # Run once per hour at minute 0 (UTC).
-    # You can change this cron expression if you want a different cadence.
+    # Run every hour at minute 0 (UTC).
+    # Change this cron expression if you want a different schedule.
     - cron: "0 * * * *"
-  # Allow manual runs from the GitHub UI (useful for testing).
+
+  # Allow manual runs from the Actions UI for testing.
   workflow_dispatch: {}
+
+# Prevent overlapping runs.
+# Only one Sisense build chain is allowed to run at a time.
+concurrency:
+  group: sisense-build-chain
+  cancel-in-progress: false
 
 jobs:
   sisense-build:
