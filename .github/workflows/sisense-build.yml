@@ -11,9 +11,10 @@ concurrency:
 
 jobs:
   sisense-build:
-
-    # 👇 Job runs ONLY when maintenance mode is NOT 'true'
-    if: ${{ env.MAINTENANCE_MODE != 'true' }}
+    # Run job unless:
+    #  - event is 'schedule' AND
+    #  - MAINTENANCE_MODE is 'true'
+    if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE == 'true') }}
 
     runs-on: ubuntu-latest
 
