@@ -18,16 +18,16 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 # --- Batch 1: fast cubes built in parallel (10 total) ---
 FAST_CUBES = [
-    {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "name": "Stonebridge BID[6,11,18,26,35]",                    "buildType": "full"},
-    {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "Equity BID[3,14]",              "buildType": "full"},
+    {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "name": "SB BID[6,11,18,26,35]",                    "buildType": "full"},
+    {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "EQ BID[3,14]",              "buildType": "full"},
     {"id": "641738cb-93ab-46f0-b2f6-351591467464", "name": "MC BID[13,23,38]",             "buildType": "full"},
     {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "name": "IR BID[12,21,28,30,37]",          "buildType": "full"},
     {"id": "b9c2f5e9-094e-4aa6-8504-86e7af9fb408", "name": "ICC BID[8,16,24,34]",        "buildType": "full"},
-    {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "name": "Swifty BID[10,19,36]",           "buildType": "full"},
-    {"id": "65aedf59-57bc-4e00-be57-e11738b38318", "name": "ZachsInvest BID[22]",            "buildType": "full"},
-    {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "NorthDirect BID[33]",                 "buildType": "full"},
-    {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "name": "Stmarycapital BID[29]",            "buildType": "full"},
-    {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "MorganMarkets BID[39]",       "buildType": "full"},
+    {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "name": "SW BID[10,19,36]",           "buildType": "full"},
+    {"id": "65aedf59-57bc-4e00-be57-e11738b38318", "name": "ZI BID[22]",            "buildType": "full"},
+    {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "NC BID[33]",                 "buildType": "full"},
+    {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "name": "SC BID[29]",            "buildType": "full"},
+    {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "MM BID[39]",       "buildType": "full"},
 ]
 
 # --- Batch 2: big cubes in parallel ---
