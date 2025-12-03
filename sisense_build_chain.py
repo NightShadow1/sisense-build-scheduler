@@ -16,6 +16,7 @@ PASSWORD = os.environ["SISENSE_PASS"]
 # --- Batch 1: fast cubes built in parallel (10 total) ---
 # Replace DATAMODEL_ID_X with your real cube IDs and choose buildType per cube.
 FAST_CUBES = [
+    {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "buildType": "full"},
     {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "buildType": "full"},
     {"id": "641738cb-93ab-46f0-b2f6-351591467464", "buildType": "full"},
     {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "buildType": "full"},
@@ -25,7 +26,6 @@ FAST_CUBES = [
     {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "buildType": "full"},
     {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "buildType": "full"},
     {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "buildType": "full"},
-    {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "buildType": "full"},
 ]
 
 # --- Batch 2: big cubes sequentially (each ~10 min) ---
@@ -106,14 +106,25 @@ def trigger_build(token: str, datamodel_id: str, build_type: str):
 def wait_for_build(token: str, build_id: str) -> str:
     """
     Poll /api/v2/builds/{buildId} until build is finished or timeout.
-    We NEVER raise here; instead, we return a status string:
-      - SUCCEEDED / FAILED / CANCELLED
-      - ERROR_HTTP / ERROR_EXCEPTION / TIMEOUT / UNKNOWN
+    We NEVER raise here; instead, we return a status string.
+
+    Logic:
+    - Certain statuses are considered "in progress" (RUNNING, QUEUED, etc.).
+    - Anything else is treated as a final status and returned.
     """
     url = f"{BASE_URL}/api/v2/builds/{build_id}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
+    }
+
+    in_progress_statuses = {
+        "QUEUED",
+        "PENDING",
+        "RUNNING",
+        "IN_PROGRESS",
+        "STARTED",
+        "SCHEDULED",
     }
 
     deadline = time.time() + BUILD_TIMEOUT_MINUTES * 60
@@ -130,12 +141,13 @@ def wait_for_build(token: str, build_id: str) -> str:
             print(f"  Exception checking build {build_id}: {e}")
             return "ERROR_EXCEPTION"
 
-        status = data.get("status") or data.get("state") or "UNKNOWN"
-        print(f"  Build {build_id} status: {status}")
+        raw_status = data.get("status") or data.get("state") or "UNKNOWN"
+        status = str(raw_status).upper()
+        print(f"  Build {build_id} status (raw='{raw_status}', normalized='{status}')")
 
-        # Sisense uses statuses like: SUCCEEDED, FAILED, CANCELLED ...
-        if status in ("SUCCEEDED", "FAILED", "CANCELLED"):
-            return status
+        # If status is not one of the "in progress" values, treat it as final.
+        if status not in in_progress_statuses:
+            return status  # could be SUCCEEDED, FAILED, CANCELLED, SUCCESS, COMPLETED, etc.
 
         if time.time() > deadline:
             print(f"  Build {build_id} timed out after {BUILD_TIMEOUT_MINUTES} minutes.")
