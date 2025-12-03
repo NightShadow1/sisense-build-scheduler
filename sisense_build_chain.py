@@ -9,33 +9,37 @@ import requests
 BASE_URL = "https://projectanalytics.sisense.com"
 
 # Credentials are taken from environment variables for safety.
-# In GitHub Actions, set them as repository secrets and map to env.
 USERNAME = os.environ["SISENSE_USER"]
 PASSWORD = os.environ["SISENSE_PASS"]
 
+# Telegram config (optional – if not set, script just logs to console)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
 # --- Batch 1: fast cubes built in parallel (10 total) ---
 FAST_CUBES = [
-    {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "buildType": "full"},
-    {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "buildType": "full"},
-    {"id": "641738cb-93ab-46f0-b2f6-351591467464", "buildType": "full"},
-    {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "buildType": "full"},
-    {"id": "b9c2f5e9-094e-4aa6-8504-86e7af9fb408", "buildType": "full"},
-    {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "buildType": "full"},
-    {"id": "65aedf59-57bc-4e00-be57-e11738b38318", "buildType": "full"},
-    {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "buildType": "full"},
-    {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "buildType": "full"},
-    {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "buildType": "full"},
+    {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "name": "MC",                    "buildType": "full"},
+    {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "Report 2",              "buildType": "full"},
+    {"id": "641738cb-93ab-46f0-b2f6-351591467464", "name": "Customers",             "buildType": "full"},
+    {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "name": "Transactions",          "buildType": "full"},
+    {"id": "b9c2f5e9-094e-4aa6-8504-86e7af9fb408", "name": "Fact Packaging",        "buildType": "full"},
+    {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "name": "Fact Claims",           "buildType": "full"},
+    {"id": "65aedf59-57bc-4e00-be57-e11738b38318", "name": "Dimensions",            "buildType": "full"},
+    {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "Label",                 "buildType": "full"},
+    {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "name": "Nutriscore",            "buildType": "full"},
+    {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "Debug / Support",       "buildType": "full"},
 ]
 
 # --- Batch 2: big cubes in parallel ---
 BIG_CUBES = [
-    {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "buildType": "full"},
-    {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "buildType": "full"},
+    {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "name": "Big Cube 1",            "buildType": "full"},
+    {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "name": "Big Cube 2",            "buildType": "full"},
 ]
 
 # --- Batch 3: final quick cube ---
 FINAL_CUBE = {
     "id": "e808e919-8ea2-420d-8df6-5430566ac1af",
+    "name": "Final Quick Cube",
     "buildType": "full",
 }
 
@@ -43,9 +47,41 @@ FINAL_CUBE = {
 POLL_INTERVAL_SECONDS = 30      # how often to check build status
 BUILD_TIMEOUT_MINUTES = 60      # safety timeout per build
 
+# Statuses that mean success
+SUCCESS_STATUSES = {"SUCCEEDED", "SUCCESS", "DONE", "COMPLETED"}
+
 
 # ============================================
-# HELPER FUNCTIONS
+# TELEGRAM HELPER
+# ============================================
+
+def send_telegram_message(text: str):
+    """
+    Send a message to Telegram, if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set.
+    Otherwise just print a note and continue.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print(f"[Telegram] Not configured, would send: {text}")
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code >= 300:
+            print(f"[Telegram] Error {resp.status_code}: {resp.text}")
+        else:
+            print("[Telegram] Notification sent.")
+    except Exception as e:
+        print(f"[Telegram] Exception while sending message: {e}")
+
+
+# ============================================
+# SISENSE HELPERS
 # ============================================
 
 def get_token() -> str:
@@ -66,11 +102,10 @@ def get_token() -> str:
     return token
 
 
-def trigger_build(token: str, datamodel_id: str, build_type: str):
+def trigger_build(token: str, datamodel_id: str, build_type: str, cube_name: str):
     """
     Trigger a build for one datamodel and return buildId.
-    If the POST fails (HTTP error, bad ID, etc.) we log and return None,
-    but we do NOT raise, so that other cubes can continue.
+    If the POST fails we log and send Telegram, then return None.
     """
     url = f"{BASE_URL}/api/v2/builds"
     headers = {
@@ -85,16 +120,20 @@ def trigger_build(token: str, datamodel_id: str, build_type: str):
         "schemaOrigin": "latest",
     }
 
-    print(f"Triggering build: datamodel={datamodel_id}, type={build_type}")
+    print(f"Triggering build: {cube_name} (datamodel={datamodel_id}, type={build_type})")
     try:
         resp = requests.post(url, json=body, headers=headers)
         print("  -> HTTP status:", resp.status_code)
         if resp.status_code >= 300:
-            print("  -> ERROR triggering build:", resp.text)
+            msg = f"❌ Sisense build trigger FAILED for cube '{cube_name}' ({datamodel_id}). HTTP {resp.status_code}: {resp.text}"
+            print("  -> " + msg)
+            send_telegram_message(msg)
             return None
         data = resp.json()
     except Exception as e:
-        print(f"  -> EXCEPTION triggering build for {datamodel_id}: {e}")
+        msg = f"❌ Exception triggering build for cube '{cube_name}' ({datamodel_id}): {e}"
+        print("  -> " + msg)
+        send_telegram_message(msg)
         return None
 
     build_id = data.get("id") or data.get("oid") or data.get("_id") or str(data)
@@ -105,13 +144,7 @@ def trigger_build(token: str, datamodel_id: str, build_type: str):
 def wait_for_build(token: str, build_id: str) -> str:
     """
     Poll /api/v2/builds/{buildId} until build is finished or timeout.
-    We NEVER raise here; instead, we return a status string.
-
-    Logic:
-    - Certain statuses are considered *final* (SUCCEEDED, FAILED, CANCELLED, DONE, etc.).
-    - Anything else is treated as "still in progress" and we keep polling.
-    - A 400 with "Data source not found for build id" is treated as "still starting",
-      because Sisense sometimes returns this briefly right after triggering the build.
+    Returns a status string.
     """
 
     url = f"{BASE_URL}/api/v2/builds/{build_id}"
@@ -120,7 +153,6 @@ def wait_for_build(token: str, build_id: str) -> str:
         "Accept": "application/json",
     }
 
-    # Statuses that mean the build is finished one way or another
     final_statuses = {
         "SUCCEEDED",
         "SUCCESS",
@@ -140,13 +172,11 @@ def wait_for_build(token: str, build_id: str) -> str:
         try:
             resp = requests.get(url, headers=headers)
 
-            # Special case: Sisense sometimes says 400 "Data source not found for build id"
-            # even though the build is in progress. Treat that as "still in progress".
+            # 400 "Data source not found for build id" – treat as transient
             if resp.status_code == 400 and "Data source not found for build id" in resp.text:
                 print(f"  Build {build_id}: 400 'Data source not found' (probably starting up), retrying...")
 
             elif resp.status_code == 404:
-                # Build record not visible yet, treat as in progress
                 print(f"  Build {build_id}: 404 Not Found yet, retrying...")
 
             elif resp.status_code >= 300:
@@ -159,7 +189,6 @@ def wait_for_build(token: str, build_id: str) -> str:
                 status = str(raw_status).upper()
                 print(f"  Build {build_id} status (raw='{raw_status}', normalized='{status}')")
 
-                # If the status is one of the known final ones, we're done
                 if status in final_statuses:
                     return status
 
@@ -179,60 +208,66 @@ def wait_for_build(token: str, build_id: str) -> str:
 # ============================================
 
 if __name__ == "__main__":
-    # 1) Login once
     token = get_token()
     print("Got token (first 30 chars):", token[:30], "...")
     print("==============================")
 
-    # 2) Batch 1: fast cubes in parallel
+    # 1) Batch 1: fast cubes in parallel
     print("=== Batch 1: fast cubes (parallel) ===")
     fast_build_ids = []
     for cube in FAST_CUBES:
         cube_id = cube["id"]
+        cube_name = cube["name"]
         build_type = cube["buildType"]
-        build_id = trigger_build(token, cube_id, build_type)
-        fast_build_ids.append((cube_id, build_id))
+        build_id = trigger_build(token, cube_id, build_type, cube_name)
+        fast_build_ids.append((cube_id, cube_name, build_id))
 
-    # Wait for all fast cubes (only those that got a buildId)
-    for cube_id, build_id in fast_build_ids:
+    for cube_id, cube_name, build_id in fast_build_ids:
         if not build_id:
-            print(f"\nSkipping wait for {cube_id} (build trigger failed).")
+            print(f"\nSkipping wait for {cube_name} ({cube_id}) (build trigger failed).")
             continue
-        print(f"\nWaiting for fast cube {cube_id} (build {build_id}) ...")
+        print(f"\nWaiting for fast cube {cube_name} ({cube_id}) (build {build_id}) ...")
         status = wait_for_build(token, build_id)
-        print(f"Fast cube {cube_id} finished with status: {status}")
+        print(f"Fast cube {cube_name} ({cube_id}) finished with status: {status}")
+        if status not in SUCCESS_STATUSES:
+            send_telegram_message(f"❌ Sisense cube '{cube_name}' finished with status: {status}")
 
-    # 3) Batch 2: big cubes in parallel
+    # 2) Batch 2: big cubes in parallel
     print("\n=== Batch 2: big cubes (parallel) ===")
     big_build_ids = []
 
-    # Trigger all big cubes
     for cube in BIG_CUBES:
         cube_id = cube["id"]
+        cube_name = cube["name"]
         build_type = cube["buildType"]
-        print(f"\nStarting big cube {cube_id} ...")
-        build_id = trigger_build(token, cube_id, build_type)
-        big_build_ids.append((cube_id, build_id))
+        print(f"\nStarting big cube {cube_name} ({cube_id}) ...")
+        build_id = trigger_build(token, cube_id, build_type, cube_name)
+        big_build_ids.append((cube_id, cube_name, build_id))
 
-    # Wait for all big cubes
-    for cube_id, build_id in big_build_ids:
+    for cube_id, cube_name, build_id in big_build_ids:
         if not build_id:
-            print(f"  Could not trigger big cube {cube_id}, skipping wait.")
+            print(f"  Could not trigger big cube {cube_name} ({cube_id}), skipping wait.")
             continue
-        print(f"  Waiting for big cube {cube_id} (build {build_id}) ...")
+        print(f"  Waiting for big cube {cube_name} ({cube_id}) (build {build_id}) ...")
         status = wait_for_build(token, build_id)
-        print(f"Big cube {cube_id} finished with status: {status}")
+        print(f"Big cube {cube_name} ({cube_id}) finished with status: {status}")
+        if status not in SUCCESS_STATUSES:
+            send_telegram_message(f"❌ Sisense big cube '{cube_name}' finished with status: {status}")
 
-    # 4) Batch 3: final quick cube
+    # 3) Batch 3: final quick cube
     print("\n=== Batch 3: final quick cube ===")
     cube_id = FINAL_CUBE["id"]
+    cube_name = FINAL_CUBE["name"]
     build_type = FINAL_CUBE["buildType"]
-    print(f"\nStarting final cube {cube_id} ...")
-    build_id = trigger_build(token, cube_id, build_type)
+    print(f"\nStarting final cube {cube_name} ({cube_id}) ...")
+    build_id = trigger_build(token, cube_id, build_type, cube_name)
     if build_id:
         status = wait_for_build(token, build_id)
-        print(f"Final cube {cube_id} finished with status: {status}")
+        print(f"Final cube {cube_name} ({cube_id}) finished with status: {status}")
+        if status not in SUCCESS_STATUSES:
+            send_telegram_message(f"❌ Sisense final cube '{cube_name}' finished with status: {status}")
     else:
-        print(f"Could not trigger final cube {cube_id}.")
+        print(f"Could not trigger final cube {cube_name} ({cube_id}).")
+        send_telegram_message(f"❌ Could not trigger final cube '{cube_name}' ({cube_id})")
 
     print("\nAll batches done.")
