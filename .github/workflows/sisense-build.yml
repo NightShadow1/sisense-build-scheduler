@@ -5,6 +5,10 @@ on:
     - cron: "0 * * * *"
   workflow_dispatch: {}
 
+# 👇 workflow-level env, visible to job-level `if:` expressions
+env:
+  MAINTENANCE_MODE: ${{ secrets.MAINTENANCE_MODE }}
+
 concurrency:
   group: sisense-build-chain
   cancel-in-progress: false
@@ -19,7 +23,6 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      MAINTENANCE_MODE: ${{ secrets.MAINTENANCE_MODE }}
       SISENSE_USER: ${{ secrets.SISENSE_USER }}
       SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
 
