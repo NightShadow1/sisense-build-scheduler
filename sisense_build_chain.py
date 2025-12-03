@@ -14,7 +14,6 @@ USERNAME = os.environ["SISENSE_USER"]
 PASSWORD = os.environ["SISENSE_PASS"]
 
 # --- Batch 1: fast cubes built in parallel (10 total) ---
-# Replace DATAMODEL_ID_X with your real cube IDs and choose buildType per cube.
 FAST_CUBES = [
     {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "buildType": "full"},
     {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "buildType": "full"},
@@ -28,8 +27,8 @@ FAST_CUBES = [
     {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "buildType": "full"},
 ]
 
-# --- Batch 2: big cubes sequentially (each ~10 min) ---
-SEQUENTIAL_BIG_CUBES = [
+# --- Batch 2: big cubes in parallel ---
+BIG_CUBES = [
     {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "buildType": "full"},
     {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "buildType": "full"},
 ]
@@ -109,8 +108,10 @@ def wait_for_build(token: str, build_id: str) -> str:
     We NEVER raise here; instead, we return a status string.
 
     Logic:
-    - Certain statuses are considered *final* (SUCCEEDED, FAILED, CANCELLED, etc.).
+    - Certain statuses are considered *final* (SUCCEEDED, FAILED, CANCELLED, DONE, etc.).
     - Anything else is treated as "still in progress" and we keep polling.
+    - A 400 with "Data source not found for build id" is treated as "still starting",
+      because Sisense sometimes returns this briefly right after triggering the build.
     """
 
     url = f"{BASE_URL}/api/v2/builds/{build_id}"
@@ -139,13 +140,19 @@ def wait_for_build(token: str, build_id: str) -> str:
         try:
             resp = requests.get(url, headers=headers)
 
-            # Handle race condition: sometimes the build record might not be ready yet
-            if resp.status_code == 404:
-                # Treat as still in progress (build just started), unless we hit timeout
+            # Special case: Sisense sometimes says 400 "Data source not found for build id"
+            # even though the build is in progress. Treat that as "still in progress".
+            if resp.status_code == 400 and "Data source not found for build id" in resp.text:
+                print(f"  Build {build_id}: 400 'Data source not found' (probably starting up), retrying...")
+
+            elif resp.status_code == 404:
+                # Build record not visible yet, treat as in progress
                 print(f"  Build {build_id}: 404 Not Found yet, retrying...")
+
             elif resp.status_code >= 300:
                 print(f"  Error checking build {build_id}: {resp.status_code} {resp.text}")
                 return "ERROR_HTTP"
+
             else:
                 data = resp.json()
                 raw_status = data.get("status") or data.get("state") or "UNKNOWN"
@@ -195,18 +202,26 @@ if __name__ == "__main__":
         status = wait_for_build(token, build_id)
         print(f"Fast cube {cube_id} finished with status: {status}")
 
-    # 3) Batch 2: big cubes sequentially
-    print("\n=== Batch 2: big cubes (sequential) ===")
-    for cube in SEQUENTIAL_BIG_CUBES:
+    # 3) Batch 2: big cubes in parallel
+    print("\n=== Batch 2: big cubes (parallel) ===")
+    big_build_ids = []
+
+    # Trigger all big cubes
+    for cube in BIG_CUBES:
         cube_id = cube["id"]
         build_type = cube["buildType"]
         print(f"\nStarting big cube {cube_id} ...")
         build_id = trigger_build(token, cube_id, build_type)
+        big_build_ids.append((cube_id, build_id))
+
+    # Wait for all big cubes
+    for cube_id, build_id in big_build_ids:
         if not build_id:
-            print(f"  Could not trigger big cube {cube_id}, continuing to next.")
+            print(f"  Could not trigger big cube {cube_id}, skipping wait.")
             continue
+        print(f"  Waiting for big cube {cube_id} (build {build_id}) ...")
         status = wait_for_build(token, build_id)
-        print(f"Big cube {cube_id} finished with status: {status} (continuing...)")
+        print(f"Big cube {cube_id} finished with status: {status}")
 
     # 4) Batch 3: final quick cube
     print("\n=== Batch 3: final quick cube ===")
