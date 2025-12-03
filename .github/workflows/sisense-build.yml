@@ -2,7 +2,7 @@ name: Sisense build chain
 
 on:
   schedule:
-    - cron: "0 * * * *"   # still runs every hour
+    - cron: "0 * * * *"
   workflow_dispatch: {}
 
 concurrency:
@@ -11,10 +11,16 @@ concurrency:
 
 jobs:
   sisense-build:
-    # 👇 if MAINTENANCE_MODE == 'true' → skip the whole job
-    if: ${{ secrets.MAINTENANCE_MODE != 'true' }}
+
+    # 👇 Job runs ONLY when maintenance mode is NOT 'true'
+    if: ${{ env.MAINTENANCE_MODE != 'true' }}
 
     runs-on: ubuntu-latest
+
+    env:
+      MAINTENANCE_MODE: ${{ secrets.MAINTENANCE_MODE }}
+      SISENSE_USER: ${{ secrets.SISENSE_USER }}
+      SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
 
     steps:
       - name: Check out repository
@@ -32,6 +38,3 @@ jobs:
 
       - name: Run Sisense build chain
         run: python sisense_build_chain.py
-        env:
-          SISENSE_USER: ${{ secrets.SISENSE_USER }}
-          SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
