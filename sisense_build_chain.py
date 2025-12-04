@@ -19,6 +19,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 # --- Batch 1: fast cubes built in parallel (10 total) ---
 FAST_CUBES = [
     {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "name": "SB BID[6,11,18,26,35]",                    "buildType": "full"},
+    {"id": "e1110242-decf-4fe5-a3b2-fd934c53650d", "name": "SB AI Ret",                    "buildType": "full"},
     {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "EQ BID[3,14]",              "buildType": "full"},
     {"id": "641738cb-93ab-46f0-b2f6-351591467464", "name": "MC BID[13,23,38]",             "buildType": "full"},
     {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "name": "IR BID[12,21,28,30,37]",          "buildType": "full"},
