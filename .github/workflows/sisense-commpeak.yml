@@ -1,0 +1,49 @@
+name: Sisense Commpeak loop
+
+on:
+  # 🔁 Every 30 minutes
+  schedule:
+    - cron: "*/30 * * * *"
+  # Manual runs allowed
+  workflow_dispatch: {}
+
+concurrency:
+  group: sisense-commpeak-chain
+  cancel-in-progress: false
+
+jobs:
+  commpeak-loop:
+    runs-on: ubuntu-latest
+
+    env:
+      SISENSE_USER: ${{ secrets.SISENSE_USER }}
+      SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
+      MAINTENANCE_MODE: ${{ secrets.MAINTENANCE_MODE }}
+      # 🔥 Catch-up mode: up to 60 loops per run
+      MAX_LOOPS_PER_RUN: "60"
+
+    steps:
+      # Skip scheduled runs during maintenance, but allow manual runs
+      - name: Maintenance mode – skipping scheduled Commpeak run
+        if: ${{ github.event_name == 'schedule' && env.MAINTENANCE_MODE == 'true' }}
+        run: echo "Maintenance mode is ON, skipping scheduled Commpeak loop."
+
+      - name: Check out repository
+        if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE == 'true') }}
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE == 'true') }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE == 'true') }}
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Run Commpeak orchestrator
+        if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE == 'true') }}
+        run: python commpeak_orchestrator.py
