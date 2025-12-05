@@ -19,6 +19,8 @@ jobs:
       SISENSE_USER: ${{ secrets.SISENSE_USER }}
       SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
       MAINTENANCE_MODE: ${{ secrets.MAINTENANCE_MODE }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
       # 🔥 Catch-up mode: up to 60 loops per run
       MAX_LOOPS_PER_RUN: "60"
 
