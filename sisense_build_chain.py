@@ -16,25 +16,26 @@ PASSWORD = os.environ["SISENSE_PASS"]
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# --- Batch 1: fast cubes built in parallel (10 total) ---
+# --- Batch 1: fast cubes built in parallel ---
 FAST_CUBES = [
-    {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "name": "SB BID[6,11,18,26,35]",                    "buildType": "full"},
-    {"id": "e1110242-decf-4fe5-a3b2-fd934c53650d", "name": "SB AI Ret",                    "buildType": "full"},
-    {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "EQ BID[3,14]",              "buildType": "full"},
-    {"id": "641738cb-93ab-46f0-b2f6-351591467464", "name": "MC BID[13,23,38]",             "buildType": "full"},
-    {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "name": "IR BID[12,21,28,30,37]",          "buildType": "full"},
-    {"id": "b9c2f5e9-094e-4aa6-8504-86e7af9fb408", "name": "ICC BID[8,16,24,34]",        "buildType": "full"},
-    {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "name": "SW BID[10,19,36]",           "buildType": "full"},
+    {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "name": "SB BID[6,11,18,26,35]", "buildType": "full"},
+    {"id": "e1110242-decf-4fe5-a3b2-fd934c53650d", "name": "SB AI Ret",             "buildType": "full"},
+    {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "EQ BID[3,14]",          "buildType": "full"},
+    {"id": "641738cb-93ab-46f0-b2f6-351591467464", "name": "MC BID[13,23,38]",      "buildType": "full"},
+    {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "name": "IR BID[12,21,28,30,37]","buildType": "full"},
+    {"id": "b9c2f5e9-094e-4aa6-8504-86e7af9fb408", "name": "ICC BID[8,16,24,34]",   "buildType": "full"},
+    {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "name": "SW BID[10,19,36]",      "buildType": "full"},
     {"id": "65aedf59-57bc-4e00-be57-e11738b38318", "name": "ZI BID[22]",            "buildType": "full"},
-    {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "NC BID[33]",                 "buildType": "full"},
+    {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "NC BID[33]",            "buildType": "full"},
     {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "name": "SC BID[29]",            "buildType": "full"},
-    {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "MM BID[39]",       "buildType": "full"},
+    {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "MM BID[39]",            "buildType": "full"},
 ]
 
-# --- Batch 2: big cubes in parallel ---
+# --- Batch 2: big cubes SEQUENTIAL ---
+# Order is important: first DWH&Crm_Sites, then Modernized DWH&Crm_Sites
 BIG_CUBES = [
-    {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "name": "Modernized DWH&Crm_Sites",            "buildType": "full"},
-    {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "name": "DWH&Crm_Sites",            "buildType": "full"},
+    {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "name": "DWH&Crm_Sites",             "buildType": "full"},
+    {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "name": "Modernized DWH&Crm_Sites",  "buildType": "full"},
 ]
 
 # --- Batch 3: final quick cube ---
@@ -233,42 +234,71 @@ if __name__ == "__main__":
         if status not in SUCCESS_STATUSES:
             send_telegram_message(f"❌ Sisense cube '{cube_name}' finished with status: {status}")
 
-    # 2) Batch 2: big cubes in parallel
-    print("\n=== Batch 2: big cubes (parallel) ===")
-    big_build_ids = []
+    # 2) Batch 2: big cubes SEQUENTIAL
+    print("\n=== Batch 2: big cubes (sequential) ===")
 
-    for cube in BIG_CUBES:
-        cube_id = cube["id"]
-        cube_name = cube["name"]
-        build_type = cube["buildType"]
-        print(f"\nStarting big cube {cube_name} ({cube_id}) ...")
-        build_id = trigger_build(token, cube_id, build_type, cube_name)
-        big_build_ids.append((cube_id, cube_name, build_id))
+    # First: DWH&Crm_Sites
+    dwh_cube = BIG_CUBES[0]
+    dwh_id = dwh_cube["id"]
+    dwh_name = dwh_cube["name"]
+    dwh_build_type = dwh_cube["buildType"]
 
-    for cube_id, cube_name, build_id in big_build_ids:
-        if not build_id:
-            print(f"  Could not trigger big cube {cube_name} ({cube_id}), skipping wait.")
-            continue
-        print(f"  Waiting for big cube {cube_name} ({cube_id}) (build {build_id}) ...")
-        status = wait_for_build(token, build_id)
-        print(f"Big cube {cube_name} ({cube_id}) finished with status: {status}")
-        if status not in SUCCESS_STATUSES:
-            send_telegram_message(f"❌ Sisense big cube '{cube_name}' finished with status: {status}")
+    print(f"\nStarting big cube {dwh_name} ({dwh_id}) ...")
+    dwh_build_id = trigger_build(token, dwh_id, dwh_build_type, dwh_name)
 
-    # 3) Batch 3: final quick cube
-    print("\n=== Batch 3: final quick cube ===")
-    cube_id = FINAL_CUBE["id"]
-    cube_name = FINAL_CUBE["name"]
-    build_type = FINAL_CUBE["buildType"]
-    print(f"\nStarting final cube {cube_name} ({cube_id}) ...")
-    build_id = trigger_build(token, cube_id, build_type, cube_name)
-    if build_id:
-        status = wait_for_build(token, build_id)
-        print(f"Final cube {cube_name} ({cube_id}) finished with status: {status}")
-        if status not in SUCCESS_STATUSES:
-            send_telegram_message(f"❌ Sisense final cube '{cube_name}' finished with status: {status}")
+    if not dwh_build_id:
+        print(f"Could not trigger {dwh_name}. Skipping Modernized DWH&Crm_Sites and Sites Compare.")
+        send_telegram_message(f"❌ Could not trigger '{dwh_name}'. Skipping downstream cubes.")
     else:
-        print(f"Could not trigger final cube {cube_name} ({cube_id}).")
-        send_telegram_message(f"❌ Could not trigger final cube '{cube_name}' ({cube_id})")
+        dwh_status = wait_for_build(token, dwh_build_id)
+        print(f"{dwh_name} ({dwh_id}) finished with status: {dwh_status}")
+        if dwh_status not in SUCCESS_STATUSES:
+            send_telegram_message(
+                f"❌ Big cube '{dwh_name}' finished with status: {dwh_status}. "
+                f"Skipping Modernized DWH&Crm_Sites and Sites Compare."
+            )
+        else:
+            # Second: Modernized DWH&Crm_Sites
+            mod_cube = BIG_CUBES[1]
+            mod_id = mod_cube["id"]
+            mod_name = mod_cube["name"]
+            mod_build_type = mod_cube["buildType"]
+
+            print(f"\nStarting big cube {mod_name} ({mod_id}) ...")
+            mod_build_id = trigger_build(token, mod_id, mod_build_type, mod_name)
+
+            if not mod_build_id:
+                print(f"Could not trigger {mod_name}. Skipping Sites Compare.")
+                send_telegram_message(
+                    f"❌ Could not trigger '{mod_name}'. Skipping Sites Compare."
+                )
+            else:
+                mod_status = wait_for_build(token, mod_build_id)
+                print(f"{mod_name} ({mod_id}) finished with status: {mod_status}")
+                if mod_status not in SUCCESS_STATUSES:
+                    send_telegram_message(
+                        f"❌ Big cube '{mod_name}' finished with status: {mod_status}. "
+                        f"Skipping Sites Compare."
+                    )
+                else:
+                    # 3) Batch 3: final quick cube, only if both big cubes succeeded
+                    print("\n=== Batch 3: final quick cube ===")
+                    cube_id = FINAL_CUBE["id"]
+                    cube_name = FINAL_CUBE["name"]
+                    build_type = FINAL_CUBE["buildType"]
+                    print(f"\nStarting final cube {cube_name} ({cube_id}) ...")
+                    build_id = trigger_build(token, cube_id, build_type, cube_name)
+                    if build_id:
+                        status = wait_for_build(token, build_id)
+                        print(f"Final cube {cube_name} ({cube_id}) finished with status: {status}")
+                        if status not in SUCCESS_STATUSES:
+                            send_telegram_message(
+                                f"❌ Sisense final cube '{cube_name}' finished with status: {status}"
+                            )
+                    else:
+                        print(f"Could not trigger final cube {cube_name} ({cube_id}).")
+                        send_telegram_message(
+                            f"❌ Could not trigger final cube '{cube_name}' ({cube_id})"
+                        )
 
     print("\nAll batches done.")
