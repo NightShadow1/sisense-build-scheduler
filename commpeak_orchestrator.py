@@ -11,17 +11,21 @@ BASE_URL = "https://projectanalytics.sisense.com"
 USERNAME = os.environ["SISENSE_USER"]
 PASSWORD = os.environ["SISENSE_PASS"]
 
-# Cube IDs + friendly names
+# Telegram config (optional – if not set, script just logs to console)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+# Cube definitions
 CUBE1 = {
     "id": "5ccf6f64-1d56-47dd-b00a-448617603dcf",
     "name": "Commpeak Calls",
-    "buildType": "full",
+    "buildType": "full",       # fetch new 500-row chunks from API
 }
 
 CUBE2 = {
     "id": "bf49122f-4abf-4b30-8a71-c52e8f613b00",
     "name": "Commpeak",
-    "buildType": "full",
+    "buildType": "by_table",   # 👈 incremental / accumulative build
 }
 
 CUBE3 = {
@@ -30,13 +34,48 @@ CUBE3 = {
     "buildType": "full",
 }
 
+CUBE4 = {
+    "id": "3d2750f8-a0d5-4606-a0e2-1dd5de4fd6ec",
+    "name": "CallsCombined",
+    "buildType": "full",
+}
+
 POLL_INTERVAL_SECONDS = 30
 BUILD_TIMEOUT_MINUTES = 60
 
-# 👇 configurable via env, default 5 for steady mode
+# Configurable via env; default 5 for steady-state.
 MAX_LOOPS_PER_RUN = int(os.getenv("MAX_LOOPS_PER_RUN", "5"))
 
 SUCCESS_STATUSES = {"SUCCEEDED", "SUCCESS", "DONE", "COMPLETED"}
+
+
+# ============================================
+# TELEGRAM HELPER
+# ============================================
+
+def send_telegram_message(text: str):
+    """
+    Send a message to Telegram, if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set.
+    Otherwise just print what would have been sent.
+    """
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print(f"[Telegram] Not configured, would send: {text}")
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+    }
+
+    try:
+        resp = requests.post(url, json=payload, timeout=10)
+        if resp.status_code >= 300:
+            print(f"[Telegram] Error {resp.status_code}: {resp.text}")
+        else:
+            print("[Telegram] Notification sent.")
+    except Exception as e:
+        print(f"[Telegram] Exception while sending message: {e}")
 
 
 # ============================================
@@ -74,11 +113,15 @@ def trigger_build(token: str, datamodel_id: str, build_type: str, cube_name: str
         resp = requests.post(url, json=body, headers=headers)
         print("  -> HTTP status:", resp.status_code)
         if resp.status_code >= 300:
-            print(f"  -> ERROR triggering {cube_name}: {resp.text}")
+            msg = f"❌ ERROR triggering {cube_name}: HTTP {resp.status_code}: {resp.text}"
+            print("  -> " + msg)
+            send_telegram_message(msg)
             return None
         data = resp.json()
     except Exception as e:
-        print(f"  -> EXCEPTION triggering {cube_name}: {e}")
+        msg = f"❌ EXCEPTION triggering {cube_name}: {e}"
+        print("  -> " + msg)
+        send_telegram_message(msg)
         return None
 
     build_id = data.get("id") or data.get("oid") or data.get("_id") or str(data)
@@ -112,7 +155,7 @@ def wait_for_build(token: str, build_id: str) -> str:
         try:
             resp = requests.get(url, headers=headers)
 
-            # Transient “just started” cases
+            # Transient cases right after triggering
             if resp.status_code == 400 and "Data source not found for build id" in resp.text:
                 print(f"  Build {build_id}: 400 'Data source not found' (probably starting up), retrying...")
             elif resp.status_code == 404:
@@ -151,6 +194,9 @@ if __name__ == "__main__":
 
     loops = 0
     successful_c2_runs = 0
+    last_cube1_status = None
+    cube3_status = None
+    cube4_status = None
 
     print("=== Commpeak loop: CUBE1 (Calls) -> CUBE2 (Commpeak) ===")
 
@@ -161,31 +207,37 @@ if __name__ == "__main__":
         # Step 1: build Commpeak Calls (Cube1)
         build1_id = trigger_build(token, CUBE1["id"], CUBE1["buildType"], CUBE1["name"])
         if not build1_id:
-            print("Could not trigger Commpeak Calls. Stopping loop for this run.")
+            # trigger_build already sent Telegram; stop the loop
+            last_cube1_status = "TRIGGER_FAILED"
             break
 
         status1 = wait_for_build(token, build1_id)
+        last_cube1_status = status1
         print(f"{CUBE1['name']} finished with status: {status1}")
 
-        # 🚩 This is your “no more new data” condition:
         if status1 not in SUCCESS_STATUSES:
-            print(
-                f"{CUBE1['name']} did not succeed (status={status1}). "
-                "Assuming no more new data for now. Stopping loop for this run."
+            # This is where you usually mean "no more new data from API"
+            msg = (
+                f"ℹ {CUBE1['name']} finished with non-success status: {status1}.\n"
+                f"Assuming no more new API data for now. Loop stopped after {loops} cycle(s)."
             )
+            print(msg)
+            send_telegram_message(msg)
             break
 
-        # Step 2: build Commpeak (Cube2) to cumulate
+        # Step 2: build Commpeak (Cube2) to cumulate (incremental)
         build2_id = trigger_build(token, CUBE2["id"], CUBE2["buildType"], CUBE2["name"])
         if not build2_id:
-            print(f"Could not trigger {CUBE2['name']}. Stopping loop for this run.")
+            # trigger_build already sent Telegram; stop the loop
             break
 
         status2 = wait_for_build(token, build2_id)
         print(f"{CUBE2['name']} finished with status: {status2}")
 
         if status2 not in SUCCESS_STATUSES:
-            print(f"{CUBE2['name']} did not succeed (status={status2}). Stopping loop for this run.")
+            msg = f"❌ {CUBE2['name']} finished with status: {status2}. Loop stopped."
+            print(msg)
+            send_telegram_message(msg)
             break
 
         successful_c2_runs += 1
@@ -195,9 +247,29 @@ if __name__ == "__main__":
     print("\n=== Final step: build Commpeak Sites Employees (Cube 3) ===")
     build3_id = trigger_build(token, CUBE3["id"], CUBE3["buildType"], CUBE3["name"])
     if build3_id:
-        status3 = wait_for_build(token, build3_id)
-        print(f"{CUBE3['name']} finished with status: {status3}")
+        cube3_status = wait_for_build(token, build3_id)
+        print(f"{CUBE3['name']} finished with status: {cube3_status}")
+        if cube3_status not in SUCCESS_STATUSES:
+            send_telegram_message(f"❌ {CUBE3['name']} finished with status: {cube3_status}")
     else:
-        print(f"Could not trigger {CUBE3['name']}.")
+        cube3_status = "TRIGGER_FAILED"
+        send_telegram_message(f"❌ Could not trigger {CUBE3['name']}.")
 
-    print(f"\nCommpeak loop done. Successful Commpeak (Cube2) runs in this workflow: {successful_c2_runs}")
+    # Then build Cube4 once
+    print("\n=== Final step 2: build CallsCombined (Cube 4) ===")
+    build4_id = trigger_build(token, CUBE4["id"], CUBE4["buildType"], CUBE4["name"])
+    if build4_id:
+        cube4_status = wait_for_build(token, build4_id)
+        print(f"{CUBE4['name']} finished with status: {cube4_status}")
+        if cube4_status not in SUCCESS_STATUSES:
+            send_telegram_message(f"❌ {CUBE4['name']} finished with status: {cube4_status}")
+    else:
+        cube4_status = "TRIGGER_FAILED"
+        send_telegram_message(f"❌ Could not trigger {CUBE4['name']}.")
+
+    print(
+        f"\nCommpeak loop done. Successful Commpeak (Cube2) runs in this workflow: {successful_c2_runs}. "
+        f"Last {CUBE1['name']} status: {last_cube1_status}, "
+        f"{CUBE3['name']} status: {cube3_status}, "
+        f"{CUBE4['name']} status: {cube4_status}."
+    )
