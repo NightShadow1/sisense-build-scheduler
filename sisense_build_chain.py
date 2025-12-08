@@ -29,6 +29,7 @@ FAST_CUBES = [
     {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "NC BID[33]",            "buildType": "full"},
     {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "name": "SC BID[29]",            "buildType": "full"},
     {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "MM BID[39]",            "buildType": "full"},
+
 ]
 
 # --- Batch 2: big cubes SEQUENTIAL ---
@@ -36,6 +37,9 @@ FAST_CUBES = [
 BIG_CUBES = [
     {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "name": "DWH&Crm_Sites",             "buildType": "full"},
     {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "name": "Modernized DWH&Crm_Sites",  "buildType": "full"},
+    {"id": "5072195f-0b4b-4c8e-aba7-7f8ab1dc927c", "name": "Plan Overview",                       "buildType": "full"},
+    {"id": "c8855636-6fc0-41e9-b4df-eba98c4d08d0", "name": "Plan Overview - Alex POC",            "buildType": "full"},
+    {"id": "7c821f78-1837-4944-aec5-42ae1ebca7aa", "name": "FTD Tracker List",            "buildType": "full"},
 ]
 
 # --- Batch 3: final quick cube ---
