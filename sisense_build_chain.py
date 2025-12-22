@@ -23,7 +23,6 @@ FAST_CUBES = [
     {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "EQ BID[3,14]",          "buildType": "full"},
     {"id": "641738cb-93ab-46f0-b2f6-351591467464", "name": "MC BID[13,23,38]",      "buildType": "full"},
     {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "name": "IR BID[12,21,28,30,37]","buildType": "full"},
-    {"id": "b9c2f5e9-094e-4aa6-8504-86e7af9fb408", "name": "ICC BID[8,16,24,34]",   "buildType": "full"},
     {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "name": "SW BID[10,19,36]",      "buildType": "full"},
     {"id": "65aedf59-57bc-4e00-be57-e11738b38318", "name": "ZI BID[22]",            "buildType": "full"},
     {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "NC BID[33]",            "buildType": "full"},
