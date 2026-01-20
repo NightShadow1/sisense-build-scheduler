@@ -1,4 +1,4 @@
-name: Sisense Widget Table -> Telegram
+name: Sisense Widget Table -> Telegram (Screenshot)
 
 on:
   schedule:
@@ -12,9 +12,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  send_widget_table:
+  send_widget_screenshot:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout
@@ -25,12 +25,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pandas
+          pip install requests playwright
+          python -m playwright install --with-deps chromium
 
-      - name: Run exporter
+      - name: Send widget screenshot to Telegram
         env:
           SISENSE_BASE_URL: "https://projectanalytics.sisense.com"
           SISENSE_USER: ${{ secrets.SISENSE_USER }}
@@ -41,4 +42,3 @@ jobs:
           WIDGET_ID: "696ea8254226499f3206be41"
         run: |
           python sisense_widget_to_telegram.py
-
