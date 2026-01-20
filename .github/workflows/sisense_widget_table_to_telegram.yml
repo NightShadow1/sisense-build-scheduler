@@ -40,4 +40,6 @@ jobs:
           DASHBOARD_ID: "696ea5f74226499f3206be3f"
           WIDGET_ID: "696ea8254226499f3206be41"
         run: |
-          python scripts/sisense_widget_to_telegram.py
+          run: |
+            python sisense_widget_to_telegram.py
+
