@@ -1,0 +1,43 @@
+name: Sisense Widget Table -> Telegram
+
+on:
+  schedule:
+    # GitHub Actions cron is UTC
+    - cron: "0 9 * * *"
+    - cron: "0 21 * * *"
+  workflow_dispatch: {}
+
+concurrency:
+  group: sisense-widget-to-telegram
+  cancel-in-progress: true
+
+jobs:
+  send_widget_table:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests pandas
+
+      - name: Run exporter
+        env:
+          SISENSE_BASE_URL: "https://projectanalytics.sisense.com"
+          SISENSE_USER: ${{ secrets.SISENSE_USER }}
+          SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DASHBOARD_ID: "696ea5f74226499f3206be3f"
+          WIDGET_ID: "696ea8254226499f3206be41"
+        run: |
+          python scripts/sisense_widget_to_telegram.py
