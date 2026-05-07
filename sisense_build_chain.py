@@ -29,6 +29,7 @@ FAST_CUBES = [
     {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "name": "SC BID[29]",            "buildType": "full"},
     {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "MM BID[39]",            "buildType": "full"},
     {"id": "640484b2-f3c5-479f-b3c4-446f701499f6", "name": "AM BID[40]",            "buildType": "full"},
+    {"id": "c9e56405-b0ac-446e-97c0-64dd787f5517", "name": "WF BID[42,43,44]",      "buildType": "full"},
 ]
 
 # --- Batch 2: big cubes SEQUENTIAL (ALL of them, in this order) ---
