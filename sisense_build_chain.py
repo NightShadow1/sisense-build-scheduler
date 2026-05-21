@@ -8,63 +8,54 @@ import requests
 
 BASE_URL = "https://projectanalytics.sisense.com"
 
-# Credentials are taken from environment variables for safety.
 USERNAME = os.environ["SISENSE_USER"]
 PASSWORD = os.environ["SISENSE_PASS"]
 
-# Telegram config (optional – if not set, script just logs to console)
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-# --- Batch 1: fast cubes built in parallel ---
+CHAIN_INTERVAL_SECONDS = 60 * 60
+
 FAST_CUBES = [
     {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "name": "SB BID[6,11,18,26,35]", "buildType": "full"},
-    {"id": "e1110242-decf-4fe5-a3b2-fd934c53650d", "name": "SB AI Ret",             "buildType": "full"},
-    {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "EQ BID[3,14]",          "buildType": "full"},
-    {"id": "641738cb-93ab-46f0-b2f6-351591467464", "name": "MC BID[13,23,38]",      "buildType": "full"},
-    {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "name": "IR BID[12,21,28,30,37]","buildType": "full"},
-    {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "name": "SW BID[10,19,36]",      "buildType": "full"},
-    {"id": "65aedf59-57bc-4e00-be57-e11738b38318", "name": "ZI BID[22]",            "buildType": "full"},
-    {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "NC BID[33]",            "buildType": "full"},
-    {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "name": "SC BID[29]",            "buildType": "full"},
-    {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "MM BID[39]",            "buildType": "full"},
-    {"id": "640484b2-f3c5-479f-b3c4-446f701499f6", "name": "AM BID[40]",            "buildType": "full"},
-    {"id": "c9e56405-b0ac-446e-97c0-64dd787f5517", "name": "WF BID[42,43,44]",      "buildType": "full"},
+    {"id": "e1110242-decf-4fe5-a3b2-fd934c53650d", "name": "SB AI Ret", "buildType": "full"},
+    {"id": "64a0ca4c-a973-403f-ad1f-ee360319c3df", "name": "EQ BID[3,14]", "buildType": "full"},
+    {"id": "641738cb-93ab-46f0-b2f6-351591467464", "name": "MC BID[13,23,38]", "buildType": "full"},
+    {"id": "9ff7407c-0ba8-4399-96f0-4d4504919399", "name": "IR BID[12,21,28,30,37]", "buildType": "full"},
+    {"id": "26158bd5-c4e3-4068-95d3-2916a0e81819", "name": "SW BID[10,19,36]", "buildType": "full"},
+    {"id": "65aedf59-57bc-4e00-be57-e11738b38318", "name": "ZI BID[22]", "buildType": "full"},
+    {"id": "0ec7e2c3-06b8-47db-9816-7bfb5766d4b8", "name": "NC BID[33]", "buildType": "full"},
+    {"id": "31d234b0-fdd5-4d6a-b963-3e22ebe54ca7", "name": "SC BID[29]", "buildType": "full"},
+    {"id": "0a920ab7-d9bb-41c1-9b5f-243f3bb6666c", "name": "MM BID[39]", "buildType": "full"},
+    {"id": "640484b2-f3c5-479f-b3c4-446f701499f6", "name": "AM BID[40]", "buildType": "full"},
+    {"id": "c9e56405-b0ac-446e-97c0-64dd787f5517", "name": "WF BID[42,43,44]", "buildType": "full"},
 ]
 
-# --- Batch 2: big cubes SEQUENTIAL (ALL of them, in this order) ---
 BIG_CUBES = [
-    {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "name": "DWH&Crm_Sites",              "buildType": "full"},
-    {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "name": "Modernized DWH&Crm_Sites",   "buildType": "full"},
-    {"id": "5072195f-0b4b-4c8e-aba7-7f8ab1dc927c", "name": "Plan Overview",              "buildType": "full"},
-    {"id": "c8855636-6fc0-41e9-b4df-eba98c4d08d0", "name": "Plan Overview - Alex POC",   "buildType": "full"},
-    {"id": "7c821f78-1837-4944-aec5-42ae1ebca7aa", "name": "FTD Tracker List",           "buildType": "full"},
+    {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "name": "DWH&Crm_Sites", "buildType": "full"},
+    {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "name": "Modernized DWH&Crm_Sites", "buildType": "full"},
+    {"id": "5072195f-0b4b-4c8e-aba7-7f8ab1dc927c", "name": "Plan Overview", "buildType": "full"},
+    {"id": "c8855636-6fc0-41e9-b4df-eba98c4d08d0", "name": "Plan Overview - Alex POC", "buildType": "full"},
+    {"id": "7c821f78-1837-4944-aec5-42ae1ebca7aa", "name": "FTD Tracker List", "buildType": "full"},
 ]
 
-# --- Batch 3: final quick cube ---
 FINAL_CUBE = {
     "id": "e808e919-8ea2-420d-8df6-5430566ac1af",
     "name": "Sites Compare",
     "buildType": "full",
 }
 
-# Polling settings
-POLL_INTERVAL_SECONDS = 30      # how often to check build status
-BUILD_TIMEOUT_MINUTES = 60      # safety timeout per build
+POLL_INTERVAL_SECONDS = 30
+BUILD_TIMEOUT_MINUTES = 60
 
-# Statuses that mean success
 SUCCESS_STATUSES = {"SUCCEEDED", "SUCCESS", "DONE", "COMPLETED"}
 
 
 # ============================================
-# TELEGRAM HELPER
+# TELEGRAM
 # ============================================
 
 def send_telegram_message(text: str):
-    """
-    Send a message to Telegram, if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are set.
-    Otherwise just print a note and continue.
-    """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print(f"[Telegram] Not configured, would send: {text}")
         return
@@ -90,17 +81,15 @@ def send_telegram_message(text: str):
 # ============================================
 
 def get_token() -> str:
-    """
-    Login to Sisense and return a fresh token.
-    If login fails, we stop the whole script (fatal).
-    """
     url = f"{BASE_URL}/api/v1/authentication/login"
     print(f"Logging in to {BASE_URL} ...")
+
     resp = requests.post(url, data={"username": USERNAME, "password": PASSWORD})
     resp.raise_for_status()
 
     data = resp.json()
     token = data.get("token") or data.get("access_token") or data.get("jwt")
+
     if not token:
         raise RuntimeError(f"No token found in login response: {data}")
 
@@ -108,16 +97,14 @@ def get_token() -> str:
 
 
 def trigger_build(token: str, datamodel_id: str, build_type: str, cube_name: str):
-    """
-    Trigger a build for one datamodel and return buildId.
-    If the POST fails we log and send Telegram, then return None.
-    """
     url = f"{BASE_URL}/api/v2/builds"
+
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
         "Content-Type": "application/json",
     }
+
     body = {
         "datamodelId": datamodel_id,
         "buildType": build_type,
@@ -125,36 +112,38 @@ def trigger_build(token: str, datamodel_id: str, build_type: str, cube_name: str
         "schemaOrigin": "latest",
     }
 
-    print(f"Triggering build: {cube_name} (datamodel={datamodel_id}, type={build_type})")
+    print(f"Triggering build: {cube_name} ({datamodel_id}, type={build_type})")
+
     try:
         resp = requests.post(url, json=body, headers=headers)
         print("  -> HTTP status:", resp.status_code)
+
         if resp.status_code >= 300:
             msg = (
                 f"❌ Sisense build trigger FAILED for cube '{cube_name}' ({datamodel_id}). "
                 f"HTTP {resp.status_code}: {resp.text}"
             )
-            print("  -> " + msg)
+            print(msg)
             send_telegram_message(msg)
             return None
+
         data = resp.json()
+
     except Exception as e:
         msg = f"❌ Exception triggering build for cube '{cube_name}' ({datamodel_id}): {e}"
-        print("  -> " + msg)
+        print(msg)
         send_telegram_message(msg)
         return None
 
     build_id = data.get("id") or data.get("oid") or data.get("_id") or str(data)
     print(f"  -> buildId: {build_id}")
+
     return build_id
 
 
 def wait_for_build(token: str, build_id: str) -> str:
-    """
-    Poll /api/v2/builds/{buildId} until build is finished or timeout.
-    Returns a status string.
-    """
     url = f"{BASE_URL}/api/v2/builds/{build_id}"
+
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
@@ -179,9 +168,8 @@ def wait_for_build(token: str, build_id: str) -> str:
         try:
             resp = requests.get(url, headers=headers)
 
-            # 400 "Data source not found for build id" – treat as transient
             if resp.status_code == 400 and "Data source not found for build id" in resp.text:
-                print(f"  Build {build_id}: 400 'Data source not found' (probably starting up), retrying...")
+                print(f"  Build {build_id}: 400 'Data source not found', retrying...")
 
             elif resp.status_code == 404:
                 print(f"  Build {build_id}: 404 Not Found yet, retrying...")
@@ -194,7 +182,8 @@ def wait_for_build(token: str, build_id: str) -> str:
                 data = resp.json()
                 raw_status = data.get("status") or data.get("state") or "UNKNOWN"
                 status = str(raw_status).upper()
-                print(f"  Build {build_id} status (raw='{raw_status}', normalized='{status}')")
+
+                print(f"  Build {build_id} status: {status}")
 
                 if status in final_statuses:
                     return status
@@ -211,36 +200,45 @@ def wait_for_build(token: str, build_id: str) -> str:
 
 
 # ============================================
-# MAIN BATCH LOGIC
+# CHAIN LOGIC
 # ============================================
 
-if __name__ == "__main__":
+def run_chain():
     token = get_token()
-    print("Got token (first 30 chars):", token[:30], "...")
+
+    print("Got token.")
     print("==============================")
 
-    # 1) Batch 1: fast cubes in parallel (trigger all, then wait each)
-    print("=== Batch 1: fast cubes (parallel trigger) ===")
+    # Batch 1: fast cubes parallel trigger
+    print("=== Batch 1: fast cubes ===")
+
     fast_build_ids = []
+
     for cube in FAST_CUBES:
-        cube_id = cube["id"]
-        cube_name = cube["name"]
-        build_type = cube["buildType"]
-        build_id = trigger_build(token, cube_id, build_type, cube_name)
-        fast_build_ids.append((cube_id, cube_name, build_id))
+        build_id = trigger_build(
+            token,
+            cube["id"],
+            cube["buildType"],
+            cube["name"]
+        )
+        fast_build_ids.append((cube["id"], cube["name"], build_id))
 
     for cube_id, cube_name, build_id in fast_build_ids:
         if not build_id:
-            print(f"\nSkipping wait for {cube_name} ({cube_id}) (build trigger failed).")
+            print(f"Skipping wait for {cube_name} ({cube_id}) because trigger failed.")
             continue
-        print(f"\nWaiting for fast cube {cube_name} ({cube_id}) (build {build_id}) ...")
+
+        print(f"\nWaiting for fast cube {cube_name} ({cube_id})...")
         status = wait_for_build(token, build_id)
-        print(f"Fast cube {cube_name} ({cube_id}) finished with status: {status}")
+
+        print(f"Fast cube {cube_name} finished with status: {status}")
+
         if status not in SUCCESS_STATUSES:
             send_telegram_message(f"❌ Sisense cube '{cube_name}' finished with status: {status}")
 
-    # 2) Batch 2: big cubes SEQUENTIAL (ALL in order)
-    print("\n=== Batch 2: big cubes (sequential) ===")
+    # Batch 2: big cubes sequential
+    print("\n=== Batch 2: big cubes sequential ===")
+
     all_big_ok = True
 
     for cube in BIG_CUBES:
@@ -248,7 +246,8 @@ if __name__ == "__main__":
         cube_name = cube["name"]
         build_type = cube["buildType"]
 
-        print(f"\nStarting big cube {cube_name} ({cube_id}) ...")
+        print(f"\nStarting big cube {cube_name} ({cube_id})...")
+
         build_id = trigger_build(token, cube_id, build_type, cube_name)
 
         if not build_id:
@@ -260,7 +259,8 @@ if __name__ == "__main__":
             break
 
         status = wait_for_build(token, build_id)
-        print(f"Big cube {cube_name} ({cube_id}) finished with status: {status}")
+
+        print(f"Big cube {cube_name} finished with status: {status}")
 
         if status not in SUCCESS_STATUSES:
             send_telegram_message(
@@ -270,24 +270,67 @@ if __name__ == "__main__":
             all_big_ok = False
             break
 
-    # 3) Batch 3: final quick cube (only if all big cubes succeeded)
+    # Batch 3: final cube
     if all_big_ok:
         print("\n=== Batch 3: final quick cube ===")
+
         cube_id = FINAL_CUBE["id"]
         cube_name = FINAL_CUBE["name"]
         build_type = FINAL_CUBE["buildType"]
 
-        print(f"\nStarting final cube {cube_name} ({cube_id}) ...")
+        print(f"\nStarting final cube {cube_name} ({cube_id})...")
+
         build_id = trigger_build(token, cube_id, build_type, cube_name)
 
         if build_id:
             status = wait_for_build(token, build_id)
-            print(f"Final cube {cube_name} ({cube_id}) finished with status: {status}")
+
+            print(f"Final cube {cube_name} finished with status: {status}")
+
             if status not in SUCCESS_STATUSES:
-                send_telegram_message(f"❌ Sisense final cube '{cube_name}' finished with status: {status}")
+                send_telegram_message(
+                    f"❌ Sisense final cube '{cube_name}' finished with status: {status}"
+                )
         else:
             send_telegram_message(f"❌ Could not trigger final cube '{cube_name}' ({cube_id})")
     else:
         print("\nSkipping Batch 3 because Batch 2 did not fully succeed.")
 
-    print("\nAll batches done.")
+    print("\nChain finished.")
+
+
+# ============================================
+# MAIN LOOP
+# ============================================
+
+if __name__ == "__main__":
+
+    while True:
+        chain_start_time = time.time()
+        chain_start_readable = time.strftime("%Y-%m-%d %H:%M:%S")
+
+        print("\n============================================")
+        print(f"Starting Sisense build chain at {chain_start_readable}")
+        print("============================================")
+
+        try:
+            run_chain()
+        except Exception as e:
+            msg = f"❌ Sisense build chain crashed with exception: {e}"
+            print(msg)
+            send_telegram_message(msg)
+
+        elapsed = time.time() - chain_start_time
+        remaining_wait = CHAIN_INTERVAL_SECONDS - elapsed
+
+        if remaining_wait > 0:
+            print(
+                f"\nChain finished before 1 hour. "
+                f"Waiting {remaining_wait / 60:.1f} minutes before next chain start."
+            )
+            time.sleep(remaining_wait)
+        else:
+            print(
+                "\nChain took longer than 1 hour. "
+                "Starting next chain immediately."
+            )
