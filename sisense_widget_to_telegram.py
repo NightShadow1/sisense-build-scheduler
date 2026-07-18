@@ -1,105 +1,164 @@
 import os
 import sys
-import requests
 from datetime import datetime, timezone
+
+import requests
 from playwright.sync_api import sync_playwright
 
-BASE_URL = os.environ["SISENSE_BASE_URL"].rstrip("/")
-USERNAME = os.environ["SISENSE_USER"]
-PASSWORD = os.environ["SISENSE_PASS"]
 
-TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+BASE_URL = "https://projectanalytics.sisense.com"
 
-DASHBOARD_ID = os.environ["DASHBOARD_ID"]
-WIDGET_ID = os.environ["WIDGET_ID"]
+DASHBOARD_ID = "6a4ec462193f10b9e24b4e05"
+WIDGET_ID = "6a4ec71e193f10b9e24b4e20"
 
-WIDGET_URL = f"{BASE_URL}/app/main/dashboards/{DASHBOARD_ID}/widgets/{WIDGET_ID}"
-LOGIN_URL  = f"{BASE_URL}/app/account#/login"
+LOGIN_URL = (
+    f"{BASE_URL}/app/account/login"
+    f"?src={BASE_URL}/app/main"
+)
 
-def telegram_send_photo(photo_path: str, caption: str):
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendPhoto"
-    with open(photo_path, "rb") as f:
-        files = {"photo": f}
-        data = {"chat_id": TELEGRAM_CHAT_ID, "caption": caption}
-        r = requests.post(url, data=data, files=files, timeout=180)
-        r.raise_for_status()
+WIDGET_URL = (
+    f"{BASE_URL}/app/main/dashboards/"
+    f"{DASHBOARD_ID}/widgets/{WIDGET_ID}"
+)
 
-def main():
-    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    caption = f"Sisense Widget Table ({now_utc})"
-    out_path = "sisense_widget.png"
+SISENSE_USER = os.environ["SISENSE_USER"]
+SISENSE_PASS = os.environ["SISENSE_PASS"]
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            viewport={"width": 1600, "height": 900},
-            # helpful for some auth flows
-            user_agent="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome Safari/537.36",
+BOT_TOKEN = os.environ["SBCALLSM_BOT_TOKEN"]
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+
+
+def send_photo(photo_path: str, caption: str) -> None:
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
+
+    with open(photo_path, "rb") as photo:
+        response = requests.post(
+            url,
+            data={
+                "chat_id": CHAT_ID,
+                "caption": caption,
+            },
+            files={"photo": photo},
+            timeout=180,
         )
+
+    response.raise_for_status()
+
+
+def main() -> None:
+    screenshot_path = "sb_calls_widget_test.png"
+
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
+            headless=True,
+        )
+
+        context = browser.new_context(
+            viewport={
+                "width": 1800,
+                "height": 1000,
+            },
+        )
+
         page = context.new_page()
 
-        # Go to the widget first; if redirected, we'll login
-        page.goto(WIDGET_URL, wait_until="domcontentloaded", timeout=120000)
-        page.wait_for_timeout(2000)
+        print("Opening Sisense login page.")
 
-        def is_login_page() -> bool:
-            url = page.url.lower()
-            if "login" in url or "account#/" in url:
-                return True
-            # also detect by fields presence
-            return page.locator("input[placeholder='Username/Email']").count() > 0
+        page.goto(
+            LOGIN_URL,
+            wait_until="domcontentloaded",
+            timeout=120_000,
+        )
 
-        if is_login_page():
-            # Ensure we are on login page
-            if "login" not in page.url.lower():
-                page.goto(LOGIN_URL, wait_until="domcontentloaded", timeout=120000)
+        page.wait_for_timeout(3_000)
 
-            # Fill login form (Sisense typical placeholders)
-            page.wait_for_selector("input[placeholder='Username/Email']", timeout=30000)
-            page.fill("input[placeholder='Username/Email']", USERNAME)
-            page.fill("input[placeholder='Password']", PASSWORD)
+        print(f"Login page URL: {page.url}")
 
-            # Click login button (try common selectors)
-            clicked = False
-            for sel in ["button:has-text('Login')", "button:has-text('Log in')", "button[type='submit']"]:
-                try:
-                    if page.locator(sel).count() > 0:
-                        page.click(sel)
-                        clicked = True
-                        break
-                except Exception:
-                    pass
+        username_input = page.locator(
+            "input[placeholder='Username/Email']"
+        )
 
-            if not clicked:
-                raise RuntimeError("Could not find Login button on Sisense login page.")
+        password_input = page.locator(
+            "input[placeholder='Password']"
+        )
 
-            # Wait for navigation/auth to complete
-            page.wait_for_timeout(4000)
+        username_input.wait_for(
+            state="visible",
+            timeout=30_000,
+        )
 
-            # Now go to widget again
-            page.goto(WIDGET_URL, wait_until="domcontentloaded", timeout=120000)
-            page.wait_for_timeout(8000)
+        username_input.fill(SISENSE_USER)
+        password_input.fill(SISENSE_PASS)
 
-        # Try to wait for any widget content (selectors vary by version)
-        # If none found, still screenshot the page (better than failing)
-        for sel in ["table", ".widget", ".dashboard", ".pivot", ".sisense-table"]:
-            try:
-                page.wait_for_selector(sel, timeout=7000)
-                break
-            except Exception:
-                continue
+        login_button = page.get_by_role(
+            "button",
+            name="Login",
+        )
 
-        page.screenshot(path=out_path, full_page=True)
+        login_button.click()
 
-        context.close()
+        print("Login button clicked.")
+
+        page.wait_for_timeout(8_000)
+
+        print(f"URL after login: {page.url}")
+
+        if "login" in page.url.lower():
+            page.screenshot(
+                path="sb_calls_login_failed.png",
+                full_page=True,
+            )
+
+            raise RuntimeError(
+                "Sisense login did not complete. "
+                "The browser is still on the login page."
+            )
+
+        print("Opening calls widget.")
+
+        page.goto(
+            WIDGET_URL,
+            wait_until="domcontentloaded",
+            timeout=120_000,
+        )
+
+        page.wait_for_timeout(15_000)
+
+        print(f"Widget URL after navigation: {page.url}")
+
+        if "login" in page.url.lower():
+            page.screenshot(
+                path="sb_calls_redirected_to_login.png",
+                full_page=True,
+            )
+
+            raise RuntimeError(
+                "Sisense redirected back to login "
+                "after opening the widget."
+            )
+
+        page.screenshot(
+            path=screenshot_path,
+            full_page=True,
+        )
+
         browser.close()
 
-    telegram_send_photo(out_path, caption)
+    timestamp = datetime.now(timezone.utc).strftime(
+        "%Y-%m-%d %H:%M UTC"
+    )
+
+    send_photo(
+        screenshot_path,
+        f"SB Calls widget login test — {timestamp}",
+    )
+
+    print("Widget screenshot sent successfully.")
+
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+    except Exception as error:
+        print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)
