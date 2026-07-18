@@ -45,8 +45,101 @@ def send_photo(photo_path: str, caption: str) -> None:
     response.raise_for_status()
 
 
+def screenshot_chart_only(page, output_path: str) -> None:
+    """
+    Screenshots only the chart area, not the full Sisense editor/page.
+    It finds the largest visible SVG chart and crops around it.
+    """
+
+    page.wait_for_selector("svg", timeout=60_000)
+
+    chart_box = page.evaluate(
+        """
+        () => {
+            const svgs = Array.from(document.querySelectorAll('svg'));
+
+            const visibleSvgs = svgs
+                .map(svg => {
+                    const rect = svg.getBoundingClientRect();
+
+                    return {
+                        x: rect.x,
+                        y: rect.y,
+                        width: rect.width,
+                        height: rect.height,
+                        area: rect.width * rect.height
+                    };
+                })
+                .filter(r =>
+                    r.width > 400 &&
+                    r.height > 300 &&
+                    r.x >= 0 &&
+                    r.y >= 0
+                );
+
+            if (visibleSvgs.length === 0) {
+                return null;
+            }
+
+            visibleSvgs.sort((a, b) => b.area - a.area);
+
+            return visibleSvgs[0];
+        }
+        """
+    )
+
+    if chart_box is None:
+        page.screenshot(path="debug_no_chart_found.png", full_page=True)
+        raise RuntimeError("Could not find the chart SVG to crop.")
+
+    viewport = page.viewport_size
+
+    if viewport is None:
+        raise RuntimeError("Could not read browser viewport size.")
+
+    # Padding around SVG so we include title, legend, labels, and axes.
+    # Adjust these only if the crop is too tight / too wide.
+    padding_left = 180
+    padding_top = 125
+    padding_right = 45
+    padding_bottom = 70
+
+    x = max(chart_box["x"] - padding_left, 0)
+    y = max(chart_box["y"] - padding_top, 0)
+
+    right = min(
+        chart_box["x"] + chart_box["width"] + padding_right,
+        viewport["width"],
+    )
+
+    bottom = min(
+        chart_box["y"] + chart_box["height"] + padding_bottom,
+        viewport["height"],
+    )
+
+    print(
+        "Cropping chart:",
+        {
+            "x": x,
+            "y": y,
+            "width": right - x,
+            "height": bottom - y,
+        },
+    )
+
+    page.screenshot(
+        path=output_path,
+        clip={
+            "x": x,
+            "y": y,
+            "width": right - x,
+            "height": bottom - y,
+        },
+    )
+
+
 def main() -> None:
-    screenshot_path = "sb_calls_widget_test.png"
+    screenshot_path = "sb_calls_chart_only.png"
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
@@ -58,6 +151,7 @@ def main() -> None:
                 "width": 1800,
                 "height": 1000,
             },
+            device_scale_factor=1,
         )
 
         page = context.new_page()
@@ -137,9 +231,9 @@ def main() -> None:
                 "after opening the widget."
             )
 
-        page.screenshot(
-            path=screenshot_path,
-            full_page=True,
+        screenshot_chart_only(
+            page,
+            screenshot_path,
         )
 
         browser.close()
@@ -150,10 +244,10 @@ def main() -> None:
 
     send_photo(
         screenshot_path,
-        f"SB Calls widget login test — {timestamp}",
+        f"SB Calls chart only test — {timestamp}",
     )
 
-    print("Widget screenshot sent successfully.")
+    print("Chart screenshot sent successfully.")
 
 
 if __name__ == "__main__":
