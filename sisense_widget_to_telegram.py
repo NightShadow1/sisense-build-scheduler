@@ -3,7 +3,7 @@ import sys
 from datetime import datetime, timezone
 
 import requests
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import Page, sync_playwright
 
 
 BASE_URL = "https://projectanalytics.sisense.com"
@@ -29,6 +29,8 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 
 def send_photo(photo_path: str, caption: str) -> None:
+    """Send an image to Telegram."""
+
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
     with open(photo_path, "rb") as photo:
@@ -38,104 +40,199 @@ def send_photo(photo_path: str, caption: str) -> None:
                 "chat_id": CHAT_ID,
                 "caption": caption,
             },
-            files={"photo": photo},
+            files={
+                "photo": (
+                    os.path.basename(photo_path),
+                    photo,
+                    "image/png",
+                )
+            },
             timeout=180,
         )
 
     response.raise_for_status()
 
+    print("Telegram photo sent successfully.")
 
-def screenshot_chart_only(page, output_path: str) -> None:
+
+def wait_for_visible_chart(page: Page) -> None:
     """
-    Screenshots only the chart area, not the full Sisense editor/page.
-    It finds the largest visible SVG chart and crops around it.
+    Wait until Sisense renders at least one large, visible SVG chart.
+
+    We deliberately do not use wait_for_selector("svg"), because Sisense
+    contains invisible SVG definitions with width and height equal to zero.
     """
 
-    page.wait_for_selector("svg", timeout=60_000)
+    print("Waiting for a large visible chart SVG.")
+
+    page.wait_for_function(
+        """
+        () => {
+            const svgs = Array.from(document.querySelectorAll("svg"));
+
+            return svgs.some(svg => {
+                const rect = svg.getBoundingClientRect();
+                const style = window.getComputedStyle(svg);
+
+                const graphicalElements = svg.querySelectorAll(
+                    "rect, path, circle, line, polyline, polygon, text"
+                ).length;
+
+                return (
+                    rect.width > 500 &&
+                    rect.height > 300 &&
+                    rect.right > 0 &&
+                    rect.bottom > 0 &&
+                    style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    Number(style.opacity || 1) > 0 &&
+                    graphicalElements > 10
+                );
+            });
+        }
+        """,
+        timeout=90_000,
+    )
+
+    print("Visible chart SVG found.")
+
+
+def screenshot_chart_only(page: Page, output_path: str) -> None:
+    """
+    Capture only the chart region.
+
+    The largest visible SVG is assumed to be the main chart. Padding is
+    added to include the chart title, legend, axis labels and agent names.
+    """
+
+    wait_for_visible_chart(page)
 
     chart_box = page.evaluate(
         """
         () => {
-            const svgs = Array.from(document.querySelectorAll('svg'));
-
-            const visibleSvgs = svgs
+            const candidates = Array.from(document.querySelectorAll("svg"))
                 .map(svg => {
                     const rect = svg.getBoundingClientRect();
+                    const style = window.getComputedStyle(svg);
+
+                    const graphicalElements = svg.querySelectorAll(
+                        "rect, path, circle, line, polyline, polygon, text"
+                    ).length;
 
                     return {
-                        x: rect.x,
-                        y: rect.y,
+                        x: rect.left + window.scrollX,
+                        y: rect.top + window.scrollY,
                         width: rect.width,
                         height: rect.height,
-                        area: rect.width * rect.height
+                        area: rect.width * rect.height,
+                        graphicalElements: graphicalElements,
+                        display: style.display,
+                        visibility: style.visibility,
+                        opacity: Number(style.opacity || 1)
                     };
                 })
-                .filter(r =>
-                    r.width > 400 &&
-                    r.height > 300 &&
-                    r.x >= 0 &&
-                    r.y >= 0
-                );
+                .filter(item =>
+                    item.width > 500 &&
+                    item.height > 300 &&
+                    item.display !== "none" &&
+                    item.visibility !== "hidden" &&
+                    item.opacity > 0 &&
+                    item.graphicalElements > 10
+                )
+                .sort((a, b) => b.area - a.area);
 
-            if (visibleSvgs.length === 0) {
+            if (candidates.length === 0) {
                 return null;
             }
 
-            visibleSvgs.sort((a, b) => b.area - a.area);
+            const documentWidth = Math.max(
+                document.documentElement.scrollWidth,
+                document.body ? document.body.scrollWidth : 0
+            );
 
-            return visibleSvgs[0];
+            const documentHeight = Math.max(
+                document.documentElement.scrollHeight,
+                document.body ? document.body.scrollHeight : 0
+            );
+
+            return {
+                chart: candidates[0],
+                documentWidth: documentWidth,
+                documentHeight: documentHeight
+            };
         }
         """
     )
 
     if chart_box is None:
-        page.screenshot(path="debug_no_chart_found.png", full_page=True)
-        raise RuntimeError("Could not find the chart SVG to crop.")
+        page.screenshot(
+            path="debug_no_visible_chart.png",
+            full_page=True,
+        )
 
-    viewport = page.viewport_size
+        raise RuntimeError(
+            "A visible Sisense chart could not be identified. "
+            "A debug screenshot was created."
+        )
 
-    if viewport is None:
-        raise RuntimeError("Could not read browser viewport size.")
-
-    # Padding around SVG so we include title, legend, labels, and axes.
-    # Adjust these only if the crop is too tight / too wide.
-    padding_left = 180
-    padding_top = 125
-    padding_right = 45
-    padding_bottom = 70
-
-    x = max(chart_box["x"] - padding_left, 0)
-    y = max(chart_box["y"] - padding_top, 0)
-
-    right = min(
-        chart_box["x"] + chart_box["width"] + padding_right,
-        viewport["width"],
-    )
-
-    bottom = min(
-        chart_box["y"] + chart_box["height"] + padding_bottom,
-        viewport["height"],
-    )
+    chart = chart_box["chart"]
 
     print(
-        "Cropping chart:",
+        "Largest chart SVG:",
         {
-            "x": x,
-            "y": y,
-            "width": right - x,
-            "height": bottom - y,
+            "x": chart["x"],
+            "y": chart["y"],
+            "width": chart["width"],
+            "height": chart["height"],
         },
     )
+
+    # Extra space around the SVG:
+    # left   -> agent names
+    # top    -> title and legend
+    # right  -> value labels
+    # bottom -> lower axis labels
+    padding_left = 190
+    padding_top = 125
+    padding_right = 55
+    padding_bottom = 70
+
+    crop_x = max(chart["x"] - padding_left, 0)
+    crop_y = max(chart["y"] - padding_top, 0)
+
+    crop_right = min(
+        chart["x"] + chart["width"] + padding_right,
+        chart_box["documentWidth"],
+    )
+
+    crop_bottom = min(
+        chart["y"] + chart["height"] + padding_bottom,
+        chart_box["documentHeight"],
+    )
+
+    crop_width = crop_right - crop_x
+    crop_height = crop_bottom - crop_y
+
+    if crop_width <= 0 or crop_height <= 0:
+        raise RuntimeError(
+            "Calculated chart screenshot dimensions are invalid."
+        )
+
+    clip = {
+        "x": crop_x,
+        "y": crop_y,
+        "width": crop_width,
+        "height": crop_height,
+    }
+
+    print("Chart screenshot crop:", clip)
 
     page.screenshot(
         path=output_path,
-        clip={
-            "x": x,
-            "y": y,
-            "width": right - x,
-            "height": bottom - y,
-        },
+        clip=clip,
     )
+
+    print(f"Chart-only screenshot created: {output_path}")
 
 
 def main() -> None:
@@ -156,87 +253,115 @@ def main() -> None:
 
         page = context.new_page()
 
-        print("Opening Sisense login page.")
+        try:
+            print("Opening Sisense login page.")
 
-        page.goto(
-            LOGIN_URL,
-            wait_until="domcontentloaded",
-            timeout=120_000,
-        )
-
-        page.wait_for_timeout(3_000)
-
-        print(f"Login page URL: {page.url}")
-
-        username_input = page.locator(
-            "input[placeholder='Username/Email']"
-        )
-
-        password_input = page.locator(
-            "input[placeholder='Password']"
-        )
-
-        username_input.wait_for(
-            state="visible",
-            timeout=30_000,
-        )
-
-        username_input.fill(SISENSE_USER)
-        password_input.fill(SISENSE_PASS)
-
-        login_button = page.get_by_role(
-            "button",
-            name="Login",
-        )
-
-        login_button.click()
-
-        print("Login button clicked.")
-
-        page.wait_for_timeout(8_000)
-
-        print(f"URL after login: {page.url}")
-
-        if "login" in page.url.lower():
-            page.screenshot(
-                path="sb_calls_login_failed.png",
-                full_page=True,
+            page.goto(
+                LOGIN_URL,
+                wait_until="domcontentloaded",
+                timeout=120_000,
             )
 
-            raise RuntimeError(
-                "Sisense login did not complete. "
-                "The browser is still on the login page."
+            page.wait_for_timeout(3_000)
+
+            print(f"Login page URL: {page.url}")
+
+            username_input = page.locator(
+                "input[placeholder='Username/Email']"
             )
 
-        print("Opening calls widget.")
-
-        page.goto(
-            WIDGET_URL,
-            wait_until="domcontentloaded",
-            timeout=120_000,
-        )
-
-        page.wait_for_timeout(15_000)
-
-        print(f"Widget URL after navigation: {page.url}")
-
-        if "login" in page.url.lower():
-            page.screenshot(
-                path="sb_calls_redirected_to_login.png",
-                full_page=True,
+            password_input = page.locator(
+                "input[placeholder='Password']"
             )
 
-            raise RuntimeError(
-                "Sisense redirected back to login "
-                "after opening the widget."
+            username_input.wait_for(
+                state="visible",
+                timeout=30_000,
             )
 
-        screenshot_chart_only(
-            page,
-            screenshot_path,
-        )
+            username_input.fill(SISENSE_USER)
+            password_input.fill(SISENSE_PASS)
 
-        browser.close()
+            login_button = page.get_by_role(
+                "button",
+                name="Login",
+            )
+
+            login_button.click()
+
+            print("Login button clicked.")
+
+            try:
+                page.wait_for_url(
+                    "**/app/main/**",
+                    timeout=60_000,
+                )
+            except Exception:
+                # Sisense may navigate to /app/main/home without immediately
+                # matching during SPA navigation, so verify the current URL.
+                page.wait_for_timeout(8_000)
+
+            print(f"URL after login: {page.url}")
+
+            if "login" in page.url.lower():
+                page.screenshot(
+                    path="sb_calls_login_failed.png",
+                    full_page=True,
+                )
+
+                raise RuntimeError(
+                    "Sisense login did not complete. "
+                    "The browser is still on the login page."
+                )
+
+            print("Opening calls widget.")
+
+            page.goto(
+                WIDGET_URL,
+                wait_until="domcontentloaded",
+                timeout=120_000,
+            )
+
+            print(f"Widget URL after navigation: {page.url}")
+
+            if "login" in page.url.lower():
+                page.screenshot(
+                    path="sb_calls_redirected_to_login.png",
+                    full_page=True,
+                )
+
+                raise RuntimeError(
+                    "Sisense redirected back to login after "
+                    "opening the widget."
+                )
+
+            # Allow the Sisense widget application and query to initialise.
+            page.wait_for_timeout(10_000)
+
+            screenshot_chart_only(
+                page,
+                screenshot_path,
+            )
+
+        except Exception:
+            # Useful diagnostic image when the GitHub workflow fails.
+            try:
+                page.screenshot(
+                    path="sb_calls_error_debug.png",
+                    full_page=True,
+                )
+                print(
+                    "Debug screenshot created: "
+                    "sb_calls_error_debug.png"
+                )
+            except Exception:
+                pass
+
+            raise
+
+        finally:
+            context.close()
+            browser.close()
 
     timestamp = datetime.now(timezone.utc).strftime(
         "%Y-%m-%d %H:%M UTC"
@@ -244,10 +369,8 @@ def main() -> None:
 
     send_photo(
         screenshot_path,
-        f"SB Calls chart only test — {timestamp}",
+        f"SB Calls chart-only test — {timestamp}",
     )
-
-    print("Chart screenshot sent successfully.")
 
 
 if __name__ == "__main__":
