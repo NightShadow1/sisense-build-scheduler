@@ -4,18 +4,14 @@ import sys
 from datetime import datetime, timezone
 
 import requests
-from playwright.sync_api import ElementHandle, Page, sync_playwright
+from playwright.sync_api import Page, sync_playwright
 
 
 BASE_URL = "https://projectanalytics.sisense.com"
-
 DASHBOARD_ID = "6a4ec462193f10b9e24b4e05"
 WIDGET_ID = "6a4ec71e193f10b9e24b4e20"
 
-LOGIN_URL = (
-    f"{BASE_URL}/app/account/login"
-    f"?src={BASE_URL}/app/main"
-)
+LOGIN_URL = f"{BASE_URL}/app/account/login?src={BASE_URL}/app/main"
 
 WIDGET_URL = (
     f"{BASE_URL}/app/main/dashboards/"
@@ -29,15 +25,30 @@ BOT_TOKEN = os.environ["SBCALLSM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 
+IGNORED_OWNER_TEXTS = {
+    "",
+    "Owner SD",
+    "Include all (no filter applied)",
+    "Allow multiselect for lists",
+    "Find in the list",
+    "Select All",
+    "Clear All",
+    "Is not",
+    "Select from list",
+    "Custom",
+    "Apply",
+    "Cancel",
+    "1 selected",
+}
+
+
 # ============================================================
 # Telegram
 # ============================================================
 
 def send_message(text: str) -> None:
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
     response = requests.post(
-        url,
+        f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
         data={
             "chat_id": CHAT_ID,
             "text": text,
@@ -46,15 +57,12 @@ def send_message(text: str) -> None:
     )
 
     response.raise_for_status()
-    print(f"Telegram message sent: {text}")
 
 
 def send_photo(photo_path: str, caption: str) -> None:
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
-
     with open(photo_path, "rb") as photo:
         response = requests.post(
-            url,
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
             data={
                 "chat_id": CHAT_ID,
                 "caption": caption,
@@ -70,7 +78,6 @@ def send_photo(photo_path: str, caption: str) -> None:
         )
 
     response.raise_for_status()
-    print(f"Telegram photo sent: {photo_path}")
 
 
 # ============================================================
@@ -78,67 +85,19 @@ def send_photo(photo_path: str, caption: str) -> None:
 # ============================================================
 
 def safe_filename(value: str) -> str:
-    filename = re.sub(
+    value = re.sub(
         r"[^A-Za-z0-9_-]+",
         "_",
         value.strip(),
     )
 
-    filename = re.sub(
+    value = re.sub(
         r"_+",
         "_",
-        filename,
+        value,
     ).strip("_")
 
-    return filename or "unknown_owner_sd"
-
-
-def clean_owner_values(values: list[str]) -> list[str]:
-    ignored_values = {
-        "",
-        "Owner SD",
-        "Owner_SD",
-        "Include all",
-        "Include All",
-        "Select all",
-        "Select All",
-        "Clear",
-        "Apply",
-        "Cancel",
-        "Search",
-        "Filter",
-        "Filters",
-        "No results",
-        "Loading",
-    }
-
-    result = []
-
-    for value in values:
-        value = re.sub(r"\s+", " ", value).strip()
-
-        if not value:
-            continue
-
-        if value in ignored_values:
-            continue
-
-        if value.lower().startswith("include all"):
-            continue
-
-        if value.lower().startswith("select all"):
-            continue
-
-        if value.lower().startswith("search"):
-            continue
-
-        if len(value) > 100:
-            continue
-
-        if value not in result:
-            result.append(value)
-
-    return result
+    return value or "unknown_owner"
 
 
 # ============================================================
@@ -156,28 +115,26 @@ def login_to_sisense(page: Page) -> None:
 
     page.wait_for_timeout(3_000)
 
-    username_input = page.locator(
+    username = page.locator(
         "input[placeholder='Username/Email']"
     )
 
-    password_input = page.locator(
+    password = page.locator(
         "input[placeholder='Password']"
     )
 
-    username_input.wait_for(
+    username.wait_for(
         state="visible",
         timeout=30_000,
     )
 
-    username_input.fill(SISENSE_USER)
-    password_input.fill(SISENSE_PASS)
+    username.fill(SISENSE_USER)
+    password.fill(SISENSE_PASS)
 
-    login_button = page.get_by_role(
+    page.get_by_role(
         "button",
         name="Login",
-    )
-
-    login_button.click()
+    ).click()
 
     try:
         page.wait_for_url(
@@ -214,13 +171,8 @@ def open_widget(page: Page) -> None:
     print(f"Widget URL: {page.url}")
 
     if "login" in page.url.lower():
-        page.screenshot(
-            path="sb_calls_redirected_to_login.png",
-            full_page=True,
-        )
-
         raise RuntimeError(
-            "Sisense redirected back to login."
+            "Sisense redirected back to the login page."
         )
 
 
@@ -228,86 +180,67 @@ def open_widget(page: Page) -> None:
 # Owner SD filter
 # ============================================================
 
-def find_owner_sd_label(page: Page):
-    """
-    Find the Owner SD filter label located furthest to the right.
+def find_owner_sd_filter_label(page: Page):
+    candidates = page.get_by_text(
+        "Owner SD",
+        exact=True,
+    )
 
-    This avoids accidentally finding text from the chart or another
-    unrelated part of the page.
-    """
+    best = None
+    best_x = -1.0
 
-    possible_labels = [
-        page.get_by_text("Owner SD", exact=True),
-        page.get_by_text("Owner_SD", exact=True),
-    ]
+    for index in range(candidates.count()):
+        candidate = candidates.nth(index)
 
-    best_locator = None
-    best_x = -1
-
-    for locator_group in possible_labels:
-        count = locator_group.count()
-
-        for index in range(count):
-            locator = locator_group.nth(index)
-
-            try:
-                if not locator.is_visible():
-                    continue
-
-                box = locator.bounding_box()
-
-                if box is None:
-                    continue
-
-                if box["x"] > best_x:
-                    best_x = box["x"]
-                    best_locator = locator
-
-            except Exception:
+        try:
+            if not candidate.is_visible():
                 continue
 
-    if best_locator is None:
+            box = candidate.bounding_box()
+
+            if box is not None and box["x"] > best_x:
+                best = candidate
+                best_x = box["x"]
+
+        except Exception:
+            continue
+
+    if best is None:
         page.screenshot(
-            path="sb_calls_owner_sd_label_not_found.png",
+            path="owner_sd_filter_not_found.png",
             full_page=True,
         )
 
         raise RuntimeError(
-            "Could not find the Owner SD filter."
+            "Could not find the Owner SD dashboard filter."
         )
 
-    return best_locator
+    return best
 
 
 def open_owner_sd_filter(page: Page) -> None:
-    print("Opening Owner SD filter.")
-
-    owner_sd_label = find_owner_sd_label(page)
+    label = find_owner_sd_filter_label(page)
 
     try:
-        owner_sd_label.click(timeout=10_000)
-    except Exception:
-        # The text itself might not be clickable, so click its parent.
-        owner_sd_label.locator("xpath=..").click(
-            timeout=10_000
+        label.click(
+            timeout=10_000,
         )
 
-    page.wait_for_timeout(2_500)
+    except Exception:
+        label.locator(
+            "xpath=.."
+        ).click(
+            timeout=10_000,
+        )
+
+    page.wait_for_timeout(2_000)
 
 
-def find_owner_sd_popup(page: Page) -> ElementHandle:
-    """
-    Find the visible popup created after opening Owner SD.
-
-    The popup must contain filter-option controls or text such as
-    'Include all'. The smallest matching popup is preferred so the
-    whole dashboard/filter panel is not selected.
-    """
-
-    popup_handle = page.evaluate_handle(
+def find_owner_sd_dialog(page: Page):
+    handle = page.evaluate_handle(
         """
         () => {
-            function isVisible(element) {
+            const visible = element => {
                 const rect = element.getBoundingClientRect();
                 const style = window.getComputedStyle(element);
 
@@ -320,171 +253,200 @@ def find_owner_sd_popup(page: Page) -> ElementHandle:
                     style.visibility !== "hidden" &&
                     Number(style.opacity || 1) > 0
                 );
-            }
+            };
 
-            const elements = Array.from(
+            const clean = value =>
+                (value || "")
+                    .replace(/\\s+/g, " ")
+                    .trim();
+
+            const titles = Array.from(
                 document.querySelectorAll("body *")
+            ).filter(element =>
+                visible(element) &&
+                clean(
+                    element.innerText ||
+                    element.textContent
+                ) === "Owner SD"
             );
 
-            const candidates = elements
-                .filter(isVisible)
-                .map(element => {
-                    const rect = element.getBoundingClientRect();
+            for (const title of titles) {
+                let current = title;
 
-                    const text = (
-                        element.innerText ||
-                        element.textContent ||
-                        ""
-                    )
-                        .replace(/\\s+/g, " ")
-                        .trim();
+                for (
+                    let level = 0;
+                    level < 12 && current;
+                    level += 1
+                ) {
+                    const text = clean(
+                        current.innerText ||
+                        current.textContent
+                    );
 
-                    const checkboxCount =
-                        element.querySelectorAll(
-                            "input[type='checkbox'], " +
-                            "[role='checkbox'], " +
-                            "[role='option'], " +
-                            "[role='menuitemcheckbox']"
-                        ).length;
+                    const rect =
+                        current.getBoundingClientRect();
 
-                    const area = rect.width * rect.height;
+                    const buttons = Array.from(
+                        current.querySelectorAll(
+                            "button, [role='button']"
+                        )
+                    ).map(element =>
+                        clean(
+                            element.innerText ||
+                            element.textContent
+                        )
+                    );
 
-                    return {
-                        element,
-                        rect,
-                        text,
-                        checkboxCount,
-                        area
-                    };
-                })
-                .filter(item =>
-                    item.rect.width >= 180 &&
-                    item.rect.width <= 900 &&
-                    item.rect.height >= 80 &&
-                    item.rect.height <= 1000 &&
-                    (
-                        item.text.includes("Include all") ||
-                        item.text.includes("Include All") ||
-                        item.checkboxCount > 0
-                    )
-                )
-                .sort((a, b) => {
-                    /*
-                     * Prefer popups with actual option controls.
-                     * When control counts are equal, prefer the
-                     * smallest matching container.
-                     */
-                    if (a.checkboxCount !== b.checkboxCount) {
-                        return b.checkboxCount - a.checkboxCount;
+                    if (
+                        rect.width >= 500 &&
+                        rect.height >= 400 &&
+                        buttons.includes("Apply") &&
+                        buttons.includes("Cancel") &&
+                        text.includes("Include all")
+                    ) {
+                        return current;
                     }
 
-                    return a.area - b.area;
-                });
-
-            if (candidates.length === 0) {
-                return null;
+                    current = current.parentElement;
+                }
             }
 
-            return candidates[0].element;
+            return null;
         }
         """
     )
 
-    popup = popup_handle.as_element()
+    dialog = handle.as_element()
 
-    if popup is None:
+    if dialog is None:
         page.screenshot(
-            path="sb_calls_owner_sd_popup_not_found.png",
+            path="owner_sd_dialog_not_found.png",
             full_page=True,
         )
 
         raise RuntimeError(
-            "Could not identify the Owner SD values popup."
+            "Could not identify the Owner SD filter dialog."
         )
 
-    box = popup.bounding_box()
-
-    print(
-        "Owner SD popup:",
-        None if box is None else {
-            "x": round(box["x"], 2),
-            "y": round(box["y"], 2),
-            "width": round(box["width"], 2),
-            "height": round(box["height"], 2),
-        },
-    )
-
-    return popup
+    return dialog
 
 
-def extract_visible_owner_values(
-    popup: ElementHandle,
-) -> list[str]:
-    """
-    Extract option text only from inside the Owner SD popup.
-    """
-
-    values = popup.evaluate(
+def find_owner_list_scroller(dialog):
+    handle = dialog.evaluate_handle(
         """
         root => {
-            function isVisible(element) {
-                const rect = element.getBoundingClientRect();
-                const style = window.getComputedStyle(element);
+            const candidates = Array.from(
+                root.querySelectorAll("*")
+            )
+                .filter(element =>
+                    element.scrollHeight >
+                        element.clientHeight + 20 &&
+                    element.clientHeight >= 120 &&
+                    element.clientWidth >= 200
+                )
+                .map(element => ({
+                    element: element,
+                    range:
+                        element.scrollHeight -
+                        element.clientHeight,
+                    area:
+                        element.clientWidth *
+                        element.clientHeight
+                }))
+                .sort((a, b) =>
+                    b.range !== a.range
+                        ? b.range - a.range
+                        : b.area - a.area
+                );
+
+            return candidates.length
+                ? candidates[0].element
+                : null;
+        }
+        """
+    )
+
+    scroller = handle.as_element()
+
+    if scroller is None:
+        raise RuntimeError(
+            "Could not find the Owner SD scrollable list."
+        )
+
+    return scroller
+
+
+def collect_visible_owner_values(
+    scroller,
+) -> list[str]:
+
+    values = scroller.evaluate(
+        """
+        root => {
+            const rootRect =
+                root.getBoundingClientRect();
+
+            const visible = element => {
+                const rect =
+                    element.getBoundingClientRect();
+
+                const style =
+                    window.getComputedStyle(element);
 
                 return (
                     rect.width > 0 &&
                     rect.height > 0 &&
+                    rect.bottom >= rootRect.top &&
+                    rect.top <= rootRect.bottom &&
                     style.display !== "none" &&
-                    style.visibility !== "hidden" &&
-                    Number(style.opacity || 1) > 0
+                    style.visibility !== "hidden"
                 );
-            }
+            };
 
-            function clean(value) {
-                return (value || "")
+            const clean = value =>
+                (value || "")
                     .replace(/\\s+/g, " ")
                     .trim();
-            }
 
-            const values = [];
+            const results = [];
 
-            const selectors = [
-                "[role='option']",
-                "[role='menuitemcheckbox']",
-                "[role='checkbox']",
-                "input[type='checkbox']",
-                "label",
-                "li"
-            ];
-
-            const elements = Array.from(
-                root.querySelectorAll(selectors.join(","))
+            const controls = Array.from(
+                root.querySelectorAll(
+                    "input[type='checkbox'], " +
+                    "[role='checkbox'], " +
+                    "[role='option'], " +
+                    "[role='menuitemcheckbox']"
+                )
             );
 
-            for (const element of elements) {
-                if (!isVisible(element)) {
+            for (const control of controls) {
+                if (!visible(control)) {
                     continue;
                 }
 
-                let row = element;
+                let row = control;
 
-                /*
-                 * Walk up a few levels to find the option row containing
-                 * both the checkbox and its text.
-                 */
-                for (let level = 0; level < 4; level += 1) {
-                    const parent = row.parentElement;
+                for (
+                    let level = 0;
+                    level < 5;
+                    level += 1
+                ) {
+                    const parent =
+                        row.parentElement;
 
-                    if (!parent || parent === root) {
+                    if (
+                        !parent ||
+                        parent === root
+                    ) {
                         break;
                     }
 
-                    const parentRect =
+                    const rect =
                         parent.getBoundingClientRect();
 
                     if (
-                        parentRect.height >= 18 &&
-                        parentRect.height <= 80
+                        rect.height >= 20 &&
+                        rect.height <= 70
                     ) {
                         row = parent;
                     } else {
@@ -495,201 +457,188 @@ def extract_visible_owner_values(
                 const text = clean(
                     row.innerText ||
                     row.textContent ||
-                    element.getAttribute("aria-label") ||
-                    ""
+                    control.getAttribute(
+                        "aria-label"
+                    )
                 );
 
-                if (text) {
-                    for (const line of text.split(/\\n+/)) {
-                        const cleanedLine = clean(line);
-
-                        if (
-                            cleanedLine &&
-                            !values.includes(cleanedLine)
-                        ) {
-                            values.push(cleanedLine);
-                        }
-                    }
+                if (
+                    text &&
+                    text.length <= 100 &&
+                    !results.includes(text)
+                ) {
+                    results.push(text);
                 }
             }
 
             /*
-             * Fallback for Sisense versions that do not expose semantic
-             * checkbox/option attributes.
+             * Fallback for Sisense versions where
+             * checkboxes have no semantic attributes.
              */
-            if (values.length === 0) {
-                const leafElements = Array.from(
-                    root.querySelectorAll("*")
+            if (!results.length) {
+                const leaves = Array.from(
+                    root.querySelectorAll(
+                        "span, label, div"
+                    )
                 ).filter(element =>
-                    isVisible(element) &&
+                    visible(element) &&
                     element.children.length === 0
                 );
 
-                for (const element of leafElements) {
+                for (const element of leaves) {
                     const text = clean(
                         element.innerText ||
-                        element.textContent ||
-                        ""
+                        element.textContent
                     );
 
                     if (
                         text &&
                         text.length <= 100 &&
-                        !values.includes(text)
+                        !results.includes(text)
                     ) {
-                        values.push(text);
+                        results.push(text);
                     }
                 }
             }
 
-            return values;
+            return results;
         }
         """
     )
 
-    return clean_owner_values(values)
+    cleaned = []
+
+    for value in values:
+        value = re.sub(
+            r"\s+",
+            " ",
+            value,
+        ).strip()
+
+        if not value:
+            continue
+
+        if value in IGNORED_OWNER_TEXTS:
+            continue
+
+        if value.lower().startswith(
+            "include all"
+        ):
+            continue
+
+        if value.lower().endswith(
+            "selected"
+        ):
+            continue
+
+        if value not in cleaned:
+            cleaned.append(value)
+
+    return cleaned
 
 
-def scroll_owner_sd_popup(
-    popup: ElementHandle,
-) -> dict:
-    """
-    Scroll the option list inside the Owner SD popup.
+def discover_owner_sd_values(
+    page: Page,
+) -> list[str]:
 
-    Returns whether scrolling is finished.
-    """
-
-    return popup.evaluate(
-        """
-        root => {
-            const candidates = [
-                root,
-                ...Array.from(root.querySelectorAll("*"))
-            ]
-                .filter(element =>
-                    element.scrollHeight >
-                    element.clientHeight + 10
-                )
-                .map(element => ({
-                    element,
-                    difference:
-                        element.scrollHeight -
-                        element.clientHeight
-                }))
-                .sort(
-                    (a, b) =>
-                        b.difference - a.difference
-                );
-
-            if (candidates.length === 0) {
-                return {
-                    done: true,
-                    scrollTop: 0,
-                    scrollHeight: 0,
-                    clientHeight: 0
-                };
-            }
-
-            const scrollElement = candidates[0].element;
-
-            const previousScrollTop =
-                scrollElement.scrollTop;
-
-            const newScrollTop = Math.min(
-                previousScrollTop +
-                    Math.max(
-                        scrollElement.clientHeight * 0.8,
-                        100
-                    ),
-                scrollElement.scrollHeight
-            );
-
-            scrollElement.scrollTop = newScrollTop;
-
-            const done =
-                newScrollTop +
-                    scrollElement.clientHeight >=
-                scrollElement.scrollHeight - 5 ||
-                newScrollTop === previousScrollTop;
-
-            return {
-                done,
-                scrollTop: newScrollTop,
-                scrollHeight:
-                    scrollElement.scrollHeight,
-                clientHeight:
-                    scrollElement.clientHeight
-            };
-        }
-        """
-    )
-
-
-def discover_owner_sd_values(page: Page) -> list[str]:
     open_owner_sd_filter(page)
 
-    popup = find_owner_sd_popup(page)
+    dialog = find_owner_sd_dialog(page)
+    scroller = find_owner_list_scroller(dialog)
 
-    all_values = []
+    scroller.evaluate(
+        "element => { element.scrollTop = 0; }"
+    )
 
-    for _ in range(50):
-        visible_values = extract_visible_owner_values(
-            popup
+    page.wait_for_timeout(500)
+
+    owners: list[str] = []
+    previous_scroll_top = -1
+
+    for _ in range(100):
+        visible_values = (
+            collect_visible_owner_values(
+                scroller
+            )
         )
 
         for value in visible_values:
-            if value not in all_values:
-                all_values.append(value)
+            if value not in owners:
+                owners.append(value)
 
-        scroll_state = scroll_owner_sd_popup(
-            popup
+        state = scroller.evaluate(
+            """
+            element => ({
+                scrollTop:
+                    element.scrollTop,
+                clientHeight:
+                    element.clientHeight,
+                scrollHeight:
+                    element.scrollHeight
+            })
+            """
+        )
+
+        at_bottom = (
+            state["scrollTop"] +
+            state["clientHeight"]
+            >=
+            state["scrollHeight"] - 5
+        )
+
+        if (
+            at_bottom or
+            state["scrollTop"] ==
+            previous_scroll_top
+        ):
+            break
+
+        previous_scroll_top = (
+            state["scrollTop"]
+        )
+
+        scroller.evaluate(
+            """
+            element => {
+                element.scrollTop = Math.min(
+                    element.scrollTop +
+                    Math.max(
+                        element.clientHeight * 0.8,
+                        120
+                    ),
+                    element.scrollHeight
+                );
+            }
+            """
         )
 
         page.wait_for_timeout(500)
 
-        if scroll_state["done"]:
-            # One final extraction after reaching the bottom.
-            visible_values = extract_visible_owner_values(
-                popup
-            )
-
-            for value in visible_values:
-                if value not in all_values:
-                    all_values.append(value)
-
-            break
-
     page.keyboard.press("Escape")
-    page.wait_for_timeout(1_000)
+    page.wait_for_timeout(800)
 
-    all_values = clean_owner_values(all_values)
+    if not owners:
+        raise RuntimeError(
+            "No Owner SD values were found."
+        )
 
     print(
-        f"Actual Owner SD values found: "
-        f"{all_values}"
+        f"Owner SD values found "
+        f"({len(owners)}): {owners}"
     )
 
-    if not all_values:
-        page.screenshot(
-            path="sb_calls_owner_sd_values_not_found.png",
-            full_page=True,
-        )
-
-        raise RuntimeError(
-            "No Owner SD values were found in the popup."
-        )
-
-    return all_values
+    return owners
 
 
-def find_option_in_popup(
-    popup: ElementHandle,
+def find_owner_option(
+    dialog,
     owner_value: str,
-) -> ElementHandle | None:
-    option_handle = popup.evaluate_handle(
+):
+
+    handle = dialog.evaluate_handle(
         """
         (root, requiredValue) => {
-            function isVisible(element) {
+            const visible = element => {
                 const rect =
                     element.getBoundingClientRect();
 
@@ -700,174 +649,208 @@ def find_option_in_popup(
                     rect.width > 0 &&
                     rect.height > 0 &&
                     style.display !== "none" &&
-                    style.visibility !== "hidden" &&
-                    Number(style.opacity || 1) > 0
+                    style.visibility !== "hidden"
                 );
-            }
+            };
 
-            function clean(value) {
-                return (value || "")
+            const clean = value =>
+                (value || "")
                     .replace(/\\s+/g, " ")
                     .trim();
-            }
 
-            const elements = Array.from(
+            const matches = Array.from(
                 root.querySelectorAll("*")
-            ).filter(isVisible);
-
-            const exactMatches = elements.filter(
-                element => {
-                    const text = clean(
+            )
+                .filter(element =>
+                    visible(element) &&
+                    clean(
                         element.innerText ||
                         element.textContent ||
                         element.getAttribute(
                             "aria-label"
-                        ) ||
-                        ""
+                        )
+                    ) === requiredValue
+                )
+                .sort((a, b) => {
+                    const aRect =
+                        a.getBoundingClientRect();
+
+                    const bRect =
+                        b.getBoundingClientRect();
+
+                    return (
+                        aRect.width *
+                        aRect.height
+                    ) - (
+                        bRect.width *
+                        bRect.height
                     );
+                });
 
-                    return text === requiredValue;
-                }
-            );
-
-            if (exactMatches.length === 0) {
+            if (!matches.length) {
                 return null;
             }
 
-            /*
-             * Prefer the smallest exact-match element, then move to
-             * its clickable option row.
-             */
-            exactMatches.sort((a, b) => {
-                const aRect =
-                    a.getBoundingClientRect();
+            const match = matches[0];
+            let current = match;
 
-                const bRect =
-                    b.getBoundingClientRect();
-
-                return (
-                    aRect.width * aRect.height -
-                    bRect.width * bRect.height
-                );
-            });
-
-            let selected =
-                exactMatches[0];
-
-            for (let level = 0; level < 4; level += 1) {
+            for (
+                let level = 0;
+                level < 5;
+                level += 1
+            ) {
                 const parent =
-                    selected.parentElement;
+                    current.parentElement;
 
-                if (!parent || parent === root) {
+                if (
+                    !parent ||
+                    parent === root
+                ) {
                     break;
                 }
 
                 const rect =
                     parent.getBoundingClientRect();
 
-                const hasControl =
-                    parent.matches(
-                        "[role='option'], " +
-                        "[role='menuitemcheckbox'], " +
-                        "[role='checkbox'], label, li"
-                    ) ||
+                const hasCheckbox = Boolean(
                     parent.querySelector(
                         "input[type='checkbox'], " +
                         "[role='checkbox']"
-                    );
+                    )
+                );
 
                 if (
-                    hasControl &&
-                    rect.height >= 18 &&
-                    rect.height <= 100
+                    hasCheckbox &&
+                    rect.height >= 20 &&
+                    rect.height <= 80
                 ) {
-                    selected = parent;
-                    break;
+                    return parent;
                 }
+
+                current = parent;
             }
 
-            return selected;
+            return match;
         }
         """,
         owner_value,
     )
 
-    return option_handle.as_element()
+    return handle.as_element()
+
+
+def option_is_selected(option) -> bool:
+    return bool(
+        option.evaluate(
+            """
+            element => {
+                let current = element;
+
+                for (
+                    let level = 0;
+                    level < 5 && current;
+                    level += 1
+                ) {
+                    const checkbox =
+                        current.matches(
+                            "input[type='checkbox']"
+                        )
+                            ? current
+                            : current.querySelector(
+                                "input[type='checkbox']"
+                            );
+
+                    if (
+                        checkbox &&
+                        checkbox.checked
+                    ) {
+                        return true;
+                    }
+
+                    if (
+                        current.getAttribute(
+                            "aria-checked"
+                        ) === "true"
+                    ) {
+                        return true;
+                    }
+
+                    if (
+                        current.getAttribute(
+                            "aria-selected"
+                        ) === "true"
+                    ) {
+                        return true;
+                    }
+
+                    current =
+                        current.parentElement;
+                }
+
+                return false;
+            }
+            """
+        )
+    )
 
 
 def select_owner_sd(
     page: Page,
     owner_value: str,
 ) -> None:
+
     print(
-        f'Selecting Owner SD "{owner_value}".'
+        f'Selecting Owner SD '
+        f'"{owner_value}".'
     )
 
     open_owner_sd_filter(page)
-    popup = find_owner_sd_popup(page)
 
-    # Use the popup search box when available.
-    search_inputs = popup.query_selector_all(
-        "input[type='search'], "
+    dialog = find_owner_sd_dialog(page)
+
+    search = dialog.query_selector(
+        "input[placeholder*='Find'], "
         "input[placeholder*='Search'], "
+        "input[type='search'], "
         "input[type='text']"
     )
 
-    for search_input in search_inputs:
-        try:
-            if search_input.is_visible():
-                search_input.fill(owner_value)
-                page.wait_for_timeout(1_500)
-                break
-        except Exception:
-            continue
+    if (
+        search is not None and
+        search.is_visible()
+    ):
+        search.fill(owner_value)
+        page.wait_for_timeout(1_200)
 
-    option = find_option_in_popup(
-        popup,
+    option = find_owner_option(
+        dialog,
         owner_value,
     )
 
     if option is None:
-        # Search might not exist, so scroll until the value is found.
-        for _ in range(50):
-            option = find_option_in_popup(
-                popup,
-                owner_value,
-            )
-
-            if option is not None:
-                break
-
-            scroll_state = scroll_owner_sd_popup(
-                popup
-            )
-
-            page.wait_for_timeout(400)
-
-            if scroll_state["done"]:
-                break
-
-    if option is None:
-        page.screenshot(
-            path=(
-                "sb_calls_owner_not_found_"
-                f"{safe_filename(owner_value)}.png"
-            ),
-            full_page=True,
-        )
-
         raise RuntimeError(
-            f'Could not find Owner SD value '
-            f'"{owner_value}" inside the filter.'
+            f'Could not find Owner SD '
+            f'value "{owner_value}" '
+            f'in the filter.'
         )
 
-    option.click()
-    page.wait_for_timeout(1_000)
+    if not option_is_selected(option):
+        option.click()
+        page.wait_for_timeout(700)
 
-    # Close the filter popup.
-    page.keyboard.press("Escape")
+    apply_button = dialog.get_by_role(
+        "button",
+        name="Apply",
+    )
 
-    # Dashboard has "Update on Every Change", so wait for refresh.
+    if apply_button.count() == 0:
+        raise RuntimeError(
+            "Could not find the Owner SD "
+            "Apply button."
+        )
+
+    apply_button.click()
+
     page.wait_for_timeout(8_000)
 
     print(
@@ -876,47 +859,42 @@ def select_owner_sd(
 
 
 # ============================================================
-# Chart
+# Chart detection and screenshot
 # ============================================================
 
 def wait_for_chart(page: Page) -> None:
     page.wait_for_function(
         """
-        () => {
-            const svgs = Array.from(
-                document.querySelectorAll("svg")
-            );
+        () => Array.from(
+            document.querySelectorAll("svg")
+        ).some(svg => {
+            const rect =
+                svg.getBoundingClientRect();
 
-            return svgs.some(svg => {
-                const rect =
-                    svg.getBoundingClientRect();
+            const style =
+                window.getComputedStyle(svg);
 
-                const style =
-                    window.getComputedStyle(svg);
+            const text = (
+                svg.textContent || ""
+            )
+                .replace(/\\s+/g, " ")
+                .trim();
 
-                const text = (
-                    svg.textContent || ""
+            return (
+                rect.width > 700 &&
+                rect.height > 400 &&
+                rect.right > 0 &&
+                rect.bottom > 0 &&
+                style.display !== "none" &&
+                style.visibility !== "hidden" &&
+                text.includes(
+                    "Total Call Duration"
+                ) &&
+                text.includes(
+                    "Unique Customers"
                 )
-                    .replace(/\\s+/g, " ")
-                    .trim();
-
-                return (
-                    rect.width > 700 &&
-                    rect.height > 400 &&
-                    rect.right > 0 &&
-                    rect.bottom > 0 &&
-                    style.display !== "none" &&
-                    style.visibility !== "hidden" &&
-                    Number(style.opacity || 1) > 0 &&
-                    text.includes(
-                        "Total Call Duration"
-                    ) &&
-                    text.includes(
-                        "Unique Customers"
-                    )
-                );
-            });
-        }
+            );
+        })
         """,
         timeout=90_000,
     )
@@ -928,19 +906,21 @@ def screenshot_chart_only(
     page: Page,
     output_path: str,
 ) -> None:
+
     wait_for_chart(page)
 
-    chart_handle = page.evaluate_handle(
+    handle = page.evaluate_handle(
         """
         () => {
-            const svgs = Array.from(
+            const candidates = Array.from(
                 document.querySelectorAll("svg")
-            );
-
-            const candidates = svgs
+            )
                 .map(svg => {
                     const rect =
                         svg.getBoundingClientRect();
+
+                    const style =
+                        window.getComputedStyle(svg);
 
                     const text = (
                         svg.textContent || ""
@@ -948,34 +928,14 @@ def screenshot_chart_only(
                         .replace(/\\s+/g, " ")
                         .trim();
 
-                    const style =
-                        window.getComputedStyle(svg);
-
-                    let score =
-                        rect.width * rect.height;
-
-                    if (
-                        text.includes(
-                            "Total Call Duration"
-                        )
-                    ) {
-                        score += 100000000;
-                    }
-
-                    if (
-                        text.includes(
-                            "Unique Customers"
-                        )
-                    ) {
-                        score += 100000000;
-                    }
-
                     return {
-                        svg,
-                        rect,
-                        text,
-                        style,
-                        score
+                        svg: svg,
+                        rect: rect,
+                        style: style,
+                        text: text,
+                        area:
+                            rect.width *
+                            rect.height
                     };
                 })
                 .filter(item =>
@@ -985,9 +945,6 @@ def screenshot_chart_only(
                     item.rect.bottom > 0 &&
                     item.style.display !== "none" &&
                     item.style.visibility !== "hidden" &&
-                    Number(
-                        item.style.opacity || 1
-                    ) > 0 &&
                     item.text.includes(
                         "Total Call Duration"
                     ) &&
@@ -997,10 +954,10 @@ def screenshot_chart_only(
                 )
                 .sort(
                     (a, b) =>
-                        b.score - a.score
+                        b.area - a.area
                 );
 
-            if (candidates.length === 0) {
+            if (!candidates.length) {
                 return null;
             }
 
@@ -1010,43 +967,35 @@ def screenshot_chart_only(
             const svgRect =
                 chartSvg.getBoundingClientRect();
 
-            let selectedElement = chartSvg;
-            let currentElement =
+            let selected = chartSvg;
+            let current =
                 chartSvg.parentElement;
 
             for (
                 let level = 0;
-                level < 8 && currentElement;
+                level < 8 && current;
                 level += 1,
-                currentElement =
-                    currentElement.parentElement
+                current = current.parentElement
             ) {
                 const rect =
-                    currentElement
-                        .getBoundingClientRect();
+                    current.getBoundingClientRect();
 
                 const text = (
-                    currentElement.textContent ||
-                    ""
+                    current.textContent || ""
                 )
                     .replace(/\\s+/g, " ")
                     .trim();
 
-                const widthDifference =
-                    rect.width - svgRect.width;
-
-                const heightDifference =
-                    rect.height - svgRect.height;
-
-                const sizeIsReasonable =
+                const reasonable =
                     rect.width >= svgRect.width &&
                     rect.height >= svgRect.height &&
-                    widthDifference <= 100 &&
-                    heightDifference <= 120;
+                    rect.width -
+                        svgRect.width <= 100 &&
+                    rect.height -
+                        svgRect.height <= 120;
 
-                if (sizeIsReasonable) {
-                    selectedElement =
-                        currentElement;
+                if (reasonable) {
+                    selected = current;
 
                     if (
                         text.includes(
@@ -1058,24 +1007,25 @@ def screenshot_chart_only(
                 }
             }
 
-            return selectedElement;
+            return selected;
         }
         """
     )
 
-    chart_element = chart_handle.as_element()
+    chart = handle.as_element()
 
-    if chart_element is None:
+    if chart is None:
         raise RuntimeError(
-            "Could not locate the chart container."
+            "Could not locate the "
+            "chart container."
         )
 
-    chart_element.screenshot(
+    chart.screenshot(
         path=output_path,
     )
 
     print(
-        f"Chart screenshot created: "
+        f"Screenshot created: "
         f"{output_path}"
     )
 
@@ -1104,23 +1054,23 @@ def main() -> None:
             login_to_sisense(page)
             open_widget(page)
 
-            owner_sd_values = (
-                discover_owner_sd_values(page)
+            owner_values = (
+                discover_owner_sd_values(
+                    page
+                )
             )
 
             send_message(
                 "SB Calls Monitor started. "
-                f"Found {len(owner_sd_values)} "
+                f"Found {len(owner_values)} "
                 "Owner SD values: "
-                + ", ".join(owner_sd_values)
+                + ", ".join(owner_values)
             )
 
-            for owner_value in owner_sd_values:
+            for owner_value in owner_values:
                 try:
-                    /*
-                     * Reload the widget for each Owner SD so every
-                     * iteration starts from a clean page state.
-                     */
+                    # Reload the widget so every Owner SD
+                    # starts from a clean page state.
                     open_widget(page)
 
                     select_owner_sd(
@@ -1129,9 +1079,9 @@ def main() -> None:
                     )
 
                     screenshot_path = (
-                        "sb_calls_"
+                        f"sb_calls_"
                         f"{safe_filename(owner_value)}"
-                        ".png"
+                        f".png"
                     )
 
                     screenshot_chart_only(
@@ -1140,8 +1090,9 @@ def main() -> None:
                     )
 
                     timestamp = (
-                        datetime.now(timezone.utc)
-                        .strftime(
+                        datetime.now(
+                            timezone.utc
+                        ).strftime(
                             "%Y-%m-%d %H:%M UTC"
                         )
                     )
@@ -1149,8 +1100,10 @@ def main() -> None:
                     send_photo(
                         screenshot_path,
                         (
-                            f"Owner SD: {owner_value}"
-                            f" | SB Calls | {timestamp}"
+                            f"Owner SD: "
+                            f"{owner_value}"
+                            f" | SB Calls"
+                            f" | {timestamp}"
                         ),
                     )
 
@@ -1162,20 +1115,23 @@ def main() -> None:
                     )
 
                     print(error_text)
-                    send_message(error_text)
 
-        except Exception as error:
+                    send_message(
+                        error_text
+                    )
+
+        except Exception:
             try:
                 page.screenshot(
-                    path="sb_calls_error_debug.png",
+                    path=(
+                        "sb_calls_error_debug.png"
+                    ),
                     full_page=True,
                 )
             except Exception:
                 pass
 
-            raise RuntimeError(
-                f"SB Calls process failed: {error}"
-            )
+            raise
 
         finally:
             context.close()
@@ -1185,9 +1141,11 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+
     except Exception as error:
         print(
             f"ERROR: {error}",
             file=sys.stderr,
         )
+
         sys.exit(1)
