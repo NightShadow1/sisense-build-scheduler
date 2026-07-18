@@ -29,7 +29,7 @@ CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 
 def send_photo(photo_path: str, caption: str) -> None:
-    """Send an image to Telegram."""
+    """Send the chart image to Telegram."""
 
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto"
 
@@ -55,15 +55,15 @@ def send_photo(photo_path: str, caption: str) -> None:
     print("Telegram photo sent successfully.")
 
 
-def wait_for_visible_chart(page: Page) -> None:
+def wait_for_chart(page: Page) -> None:
     """
-    Wait until Sisense renders at least one large, visible SVG chart.
+    Wait for the Agent Call Display chart to render.
 
-    We deliberately do not use wait_for_selector("svg"), because Sisense
-    contains invisible SVG definitions with width and height equal to zero.
+    The chart is identified by its two legend labels rather than simply
+    selecting the first or largest SVG on the Sisense page.
     """
 
-    print("Waiting for a large visible chart SVG.")
+    print("Waiting for the Agent Call Display chart.")
 
     page.wait_for_function(
         """
@@ -72,21 +72,22 @@ def wait_for_visible_chart(page: Page) -> None:
 
             return svgs.some(svg => {
                 const rect = svg.getBoundingClientRect();
+                const text = (svg.textContent || "")
+                    .replace(/\\s+/g, " ")
+                    .trim();
+
                 const style = window.getComputedStyle(svg);
 
-                const graphicalElements = svg.querySelectorAll(
-                    "rect, path, circle, line, polyline, polygon, text"
-                ).length;
-
                 return (
-                    rect.width > 500 &&
-                    rect.height > 300 &&
+                    rect.width > 700 &&
+                    rect.height > 400 &&
                     rect.right > 0 &&
                     rect.bottom > 0 &&
                     style.display !== "none" &&
                     style.visibility !== "hidden" &&
                     Number(style.opacity || 1) > 0 &&
-                    graphicalElements > 10
+                    text.includes("Total Call Duration") &&
+                    text.includes("Unique Customers")
                 );
             });
         }
@@ -94,142 +95,154 @@ def wait_for_visible_chart(page: Page) -> None:
         timeout=90_000,
     )
 
-    print("Visible chart SVG found.")
+    # Allow final labels and animations to settle.
+    page.wait_for_timeout(3_000)
+
+    print("Agent Call Display chart found.")
 
 
 def screenshot_chart_only(page: Page, output_path: str) -> None:
     """
-    Capture only the chart region.
+    Screenshot only the actual chart container.
 
-    The largest visible SVG is assumed to be the main chart. Padding is
-    added to include the chart title, legend, axis labels and agent names.
+    This excludes:
+    - Sisense navigation
+    - left configuration panel
+    - right design panel
+    - Apply/Cancel buttons
     """
 
-    wait_for_visible_chart(page)
+    wait_for_chart(page)
 
-    chart_box = page.evaluate(
+    chart_handle = page.evaluate_handle(
         """
         () => {
-            const candidates = Array.from(document.querySelectorAll("svg"))
+            const svgs = Array.from(document.querySelectorAll("svg"));
+
+            const candidates = svgs
                 .map(svg => {
                     const rect = svg.getBoundingClientRect();
+                    const text = (svg.textContent || "")
+                        .replace(/\\s+/g, " ")
+                        .trim();
+
                     const style = window.getComputedStyle(svg);
 
-                    const graphicalElements = svg.querySelectorAll(
-                        "rect, path, circle, line, polyline, polygon, text"
-                    ).length;
+                    let score = rect.width * rect.height;
+
+                    if (text.includes("Total Call Duration")) {
+                        score += 100000000;
+                    }
+
+                    if (text.includes("Unique Customers")) {
+                        score += 100000000;
+                    }
 
                     return {
-                        x: rect.left + window.scrollX,
-                        y: rect.top + window.scrollY,
-                        width: rect.width,
-                        height: rect.height,
-                        area: rect.width * rect.height,
-                        graphicalElements: graphicalElements,
-                        display: style.display,
-                        visibility: style.visibility,
-                        opacity: Number(style.opacity || 1)
+                        svg,
+                        rect,
+                        text,
+                        style,
+                        score
                     };
                 })
                 .filter(item =>
-                    item.width > 500 &&
-                    item.height > 300 &&
-                    item.display !== "none" &&
-                    item.visibility !== "hidden" &&
-                    item.opacity > 0 &&
-                    item.graphicalElements > 10
+                    item.rect.width > 700 &&
+                    item.rect.height > 400 &&
+                    item.rect.right > 0 &&
+                    item.rect.bottom > 0 &&
+                    item.style.display !== "none" &&
+                    item.style.visibility !== "hidden" &&
+                    Number(item.style.opacity || 1) > 0 &&
+                    item.text.includes("Total Call Duration") &&
+                    item.text.includes("Unique Customers")
                 )
-                .sort((a, b) => b.area - a.area);
+                .sort((a, b) => b.score - a.score);
 
             if (candidates.length === 0) {
                 return null;
             }
 
-            const documentWidth = Math.max(
-                document.documentElement.scrollWidth,
-                document.body ? document.body.scrollWidth : 0
-            );
+            const chartSvg = candidates[0].svg;
+            const svgRect = chartSvg.getBoundingClientRect();
 
-            const documentHeight = Math.max(
-                document.documentElement.scrollHeight,
-                document.body ? document.body.scrollHeight : 0
-            );
+            /*
+             * Start with the SVG itself. Then move upward through its
+             * parents and choose the smallest parent that can include the
+             * title without including the editor side panels.
+             */
+            let selectedElement = chartSvg;
+            let currentElement = chartSvg.parentElement;
 
-            return {
-                chart: candidates[0],
-                documentWidth: documentWidth,
-                documentHeight: documentHeight
-            };
+            for (
+                let level = 0;
+                level < 8 && currentElement;
+                level += 1, currentElement = currentElement.parentElement
+            ) {
+                const rect = currentElement.getBoundingClientRect();
+
+                const text = (currentElement.textContent || "")
+                    .replace(/\\s+/g, " ")
+                    .trim();
+
+                const widthDifference = rect.width - svgRect.width;
+                const heightDifference = rect.height - svgRect.height;
+
+                const sizeIsReasonable =
+                    rect.width >= svgRect.width &&
+                    rect.height >= svgRect.height &&
+                    widthDifference <= 100 &&
+                    heightDifference <= 120;
+
+                if (sizeIsReasonable) {
+                    selectedElement = currentElement;
+
+                    /*
+                     * Stop once we find the small container that also
+                     * contains the chart title.
+                     */
+                    if (text.includes("Agent Call Display")) {
+                        break;
+                    }
+                }
+            }
+
+            return selectedElement;
         }
         """
     )
 
-    if chart_box is None:
+    chart_element = chart_handle.as_element()
+
+    if chart_element is None:
         page.screenshot(
-            path="debug_no_visible_chart.png",
+            path="sb_calls_chart_crop_debug.png",
             full_page=True,
         )
 
         raise RuntimeError(
-            "A visible Sisense chart could not be identified. "
-            "A debug screenshot was created."
+            "Could not locate the Agent Call Display chart container."
         )
 
-    chart = chart_box["chart"]
+    box = chart_element.bounding_box()
+
+    if box is None:
+        raise RuntimeError(
+            "The chart container was found but has no visible dimensions."
+        )
 
     print(
-        "Largest chart SVG:",
+        "Chart container:",
         {
-            "x": chart["x"],
-            "y": chart["y"],
-            "width": chart["width"],
-            "height": chart["height"],
+            "x": round(box["x"], 2),
+            "y": round(box["y"], 2),
+            "width": round(box["width"], 2),
+            "height": round(box["height"], 2),
         },
     )
 
-    # Extra space around the SVG:
-    # left   -> agent names
-    # top    -> title and legend
-    # right  -> value labels
-    # bottom -> lower axis labels
-    padding_left = 190
-    padding_top = 125
-    padding_right = 55
-    padding_bottom = 70
-
-    crop_x = max(chart["x"] - padding_left, 0)
-    crop_y = max(chart["y"] - padding_top, 0)
-
-    crop_right = min(
-        chart["x"] + chart["width"] + padding_right,
-        chart_box["documentWidth"],
-    )
-
-    crop_bottom = min(
-        chart["y"] + chart["height"] + padding_bottom,
-        chart_box["documentHeight"],
-    )
-
-    crop_width = crop_right - crop_x
-    crop_height = crop_bottom - crop_y
-
-    if crop_width <= 0 or crop_height <= 0:
-        raise RuntimeError(
-            "Calculated chart screenshot dimensions are invalid."
-        )
-
-    clip = {
-        "x": crop_x,
-        "y": crop_y,
-        "width": crop_width,
-        "height": crop_height,
-    }
-
-    print("Chart screenshot crop:", clip)
-
-    page.screenshot(
+    chart_element.screenshot(
         path=output_path,
-        clip=clip,
     )
 
     print(f"Chart-only screenshot created: {output_path}")
@@ -246,7 +259,7 @@ def main() -> None:
         context = browser.new_context(
             viewport={
                 "width": 1800,
-                "height": 1000,
+                "height": 1100,
             },
             device_scale_factor=1,
         )
@@ -297,8 +310,6 @@ def main() -> None:
                     timeout=60_000,
                 )
             except Exception:
-                # Sisense may navigate to /app/main/home without immediately
-                # matching during SPA navigation, so verify the current URL.
                 page.wait_for_timeout(8_000)
 
             print(f"URL after login: {page.url}")
@@ -335,7 +346,6 @@ def main() -> None:
                     "opening the widget."
                 )
 
-            # Allow the Sisense widget application and query to initialise.
             page.wait_for_timeout(10_000)
 
             screenshot_chart_only(
@@ -344,12 +354,12 @@ def main() -> None:
             )
 
         except Exception:
-            # Useful diagnostic image when the GitHub workflow fails.
             try:
                 page.screenshot(
                     path="sb_calls_error_debug.png",
                     full_page=True,
                 )
+
                 print(
                     "Debug screenshot created: "
                     "sb_calls_error_debug.png"
