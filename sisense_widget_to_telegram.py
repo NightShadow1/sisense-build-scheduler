@@ -1,3 +1,4 @@
+
 import os
 import re
 import sys
@@ -8,29 +9,19 @@ import requests
 from playwright.sync_api import ElementHandle, Page, sync_playwright
 
 
-# ============================================================
-# Configuration
-# ============================================================
-
 BASE_URL = "https://projectanalytics.sisense.com"
 DASHBOARD_ID = "6a4ec462193f10b9e24b4e05"
 
-LOGIN_URL = (
-    f"{BASE_URL}/app/account/login"
-    f"?src={BASE_URL}/app/main"
-)
-
-DASHBOARD_URL = (
-    f"{BASE_URL}/app/main/dashboards/{DASHBOARD_ID}"
-)
+LOGIN_URL = f"{BASE_URL}/app/account/login?src={BASE_URL}/app/main"
+DASHBOARD_URL = f"{BASE_URL}/app/main/dashboards/{DASHBOARD_ID}"
 
 SISENSE_USER = os.environ["SISENSE_USER"]
 SISENSE_PASS = os.environ["SISENSE_PASS"]
-
 BOT_TOKEN = os.environ["SBCALLSM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
-IGNORED_OWNER_VALUES = {
+
+IGNORED_TEXTS = {
     "",
     "Owner SD",
     "Include all (no filter applied)",
@@ -48,32 +39,20 @@ IGNORED_OWNER_VALUES = {
 }
 
 
-# ============================================================
-# Telegram
-# ============================================================
-
 def send_message(text: str) -> None:
     response = requests.post(
         f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-        data={
-            "chat_id": CHAT_ID,
-            "text": text,
-        },
+        data={"chat_id": CHAT_ID, "text": text},
         timeout=180,
     )
-
     response.raise_for_status()
-    print(f"Telegram message sent: {text}")
 
 
 def send_photo(photo_path: str, caption: str) -> None:
     with open(photo_path, "rb") as photo:
         response = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
-            data={
-                "chat_id": CHAT_ID,
-                "caption": caption,
-            },
+            data={"chat_id": CHAT_ID, "caption": caption},
             files={
                 "photo": (
                     os.path.basename(photo_path),
@@ -83,42 +62,20 @@ def send_photo(photo_path: str, caption: str) -> None:
             },
             timeout=180,
         )
-
     response.raise_for_status()
-    print(f"Telegram photo sent: {photo_path}")
 
-
-# ============================================================
-# General helpers
-# ============================================================
 
 def clean_text(value: str) -> str:
-    return re.sub(
-        r"\s+",
-        " ",
-        value or "",
-    ).strip()
+    return re.sub(r"\s+", " ", value or "").strip()
 
 
 def safe_filename(value: str) -> str:
-    filename = re.sub(
-        r"[^A-Za-z0-9_-]+",
-        "_",
-        value.strip(),
-    )
-
-    filename = re.sub(
-        r"_+",
-        "_",
-        filename,
-    ).strip("_")
-
+    filename = re.sub(r"[^A-Za-z0-9_-]+", "_", value.strip())
+    filename = re.sub(r"_+", "_", filename).strip("_")
     return filename or "unknown_owner_sd"
 
 
-def clean_owner_values(
-    values: list[str],
-) -> list[str]:
+def clean_owner_values(values: list[str]) -> list[str]:
     result: list[str] = []
 
     for raw_value in values:
@@ -126,28 +83,19 @@ def clean_owner_values(
 
         if not value:
             continue
-
-        if value in IGNORED_OWNER_VALUES:
+        if value in IGNORED_TEXTS:
             continue
-
         if value.lower().startswith("include all"):
             continue
-
         if value.lower().endswith("selected"):
             continue
-
         if len(value) > 100:
             continue
-
         if value not in result:
             result.append(value)
 
     return result
 
-
-# ============================================================
-# Sisense login and dashboard
-# ============================================================
 
 def login_to_sisense(page: Page) -> None:
     print("Opening Sisense login page.")
@@ -157,13 +105,11 @@ def login_to_sisense(page: Page) -> None:
         wait_until="domcontentloaded",
         timeout=120_000,
     )
-
     page.wait_for_timeout(3_000)
 
     username_input = page.locator(
         "input[placeholder='Username/Email']"
     )
-
     password_input = page.locator(
         "input[placeholder='Password']"
     )
@@ -176,17 +122,10 @@ def login_to_sisense(page: Page) -> None:
     username_input.fill(SISENSE_USER)
     password_input.fill(SISENSE_PASS)
 
-    page.get_by_role(
-        "button",
-        name="Login",
-    ).click()
+    page.get_by_role("button", name="Login").click()
 
     try:
-        page.wait_for_url(
-            "**/app/main/**",
-            timeout=60_000,
-        )
-
+        page.wait_for_url("**/app/main/**", timeout=60_000)
     except Exception:
         page.wait_for_timeout(8_000)
 
@@ -197,10 +136,7 @@ def login_to_sisense(page: Page) -> None:
             path="sb_calls_login_failed.png",
             full_page=True,
         )
-
-        raise RuntimeError(
-            "Sisense login did not complete."
-        )
+        raise RuntimeError("Sisense login did not complete.")
 
 
 def open_dashboard(page: Page) -> None:
@@ -217,9 +153,6 @@ def open_dashboard(page: Page) -> None:
             "Sisense redirected back to the login page."
         )
 
-    # Do not wait for "Calls Monitor" because Sisense renders it twice:
-    # once in the dashboard title and once in the navigation tree.
-    # Wait for the exact Owner SD filter on the right side instead.
     page.wait_for_function(
         """
         () => {
@@ -236,8 +169,7 @@ def open_dashboard(page: Page) -> None:
                     rect.right > 0 &&
                     rect.bottom > 0 &&
                     style.display !== "none" &&
-                    style.visibility !== "hidden" &&
-                    Number(style.opacity || 1) > 0
+                    style.visibility !== "hidden"
                 );
             };
 
@@ -249,7 +181,6 @@ def open_dashboard(page: Page) -> None:
                 }
 
                 const rect = element.getBoundingClientRect();
-
                 const text = clean(
                     element.innerText ||
                     element.textContent
@@ -266,18 +197,13 @@ def open_dashboard(page: Page) -> None:
     )
 
     page.wait_for_timeout(4_000)
-
     print(f"Dashboard URL: {page.url}")
 
 
-# ============================================================
-# Owner SD filter
-# ============================================================
+def click_owner_sd_filter(page: Page) -> None:
+    print("Opening Owner SD filter.")
 
-def find_owner_sd_filter(
-    page: Page,
-) -> ElementHandle:
-    handle = page.evaluate_handle(
+    clicked = page.evaluate(
         """
         () => {
             const clean = value =>
@@ -293,8 +219,7 @@ def find_owner_sd_filter(
                     rect.right > 0 &&
                     rect.bottom > 0 &&
                     style.display !== "none" &&
-                    style.visibility !== "hidden" &&
-                    Number(style.opacity || 1) > 0
+                    style.visibility !== "hidden"
                 );
             };
 
@@ -306,7 +231,6 @@ def find_owner_sd_filter(
                 }
 
                 const rect = element.getBoundingClientRect();
-
                 const text = clean(
                     element.innerText ||
                     element.textContent
@@ -319,7 +243,7 @@ def find_owner_sd_filter(
             });
 
             if (!matches.length) {
-                return null;
+                return false;
             }
 
             matches.sort((a, b) => {
@@ -332,21 +256,17 @@ def find_owner_sd_filter(
                 );
             });
 
-            let selected = matches[0];
+            let target = matches[0];
+            let current = target;
 
-            for (
-                let level = 0;
-                level < 7;
-                level += 1
-            ) {
-                const parent = selected.parentElement;
+            for (let level = 0; level < 6; level += 1) {
+                const parent = current.parentElement;
 
                 if (!parent) {
                     break;
                 }
 
                 const rect = parent.getBoundingClientRect();
-
                 const text = clean(
                     parent.innerText ||
                     parent.textContent
@@ -359,43 +279,27 @@ def find_owner_sd_filter(
                     rect.height <= 180 &&
                     text.includes("Owner SD")
                 ) {
-                    selected = parent;
+                    target = parent;
+                    current = parent;
                 } else {
                     break;
                 }
             }
 
-            return selected;
+            target.click();
+            return true;
         }
         """
     )
 
-    owner_filter = handle.as_element()
-
-    if owner_filter is None:
+    if not clicked:
         page.screenshot(
             path="owner_sd_filter_not_found.png",
             full_page=True,
         )
-
         raise RuntimeError(
             "Could not find Owner SD in the dashboard Filters panel."
         )
-
-    return owner_filter
-
-
-def open_owner_sd_filter(page: Page) -> None:
-    print("Opening Owner SD dashboard filter.")
-
-    owner_filter = find_owner_sd_filter(page)
-
-    owner_filter.scroll_into_view_if_needed()
-
-    owner_filter.click(
-        force=True,
-        timeout=15_000,
-    )
 
     page.wait_for_function(
         """
@@ -403,35 +307,24 @@ def open_owner_sd_filter(page: Page) -> None:
             const clean = value =>
                 (value || "").replace(/\\s+/g, " ").trim();
 
-            const visible = element => {
+            return Array.from(
+                document.querySelectorAll("body *")
+            ).some(element => {
                 const rect = element.getBoundingClientRect();
                 const style = window.getComputedStyle(element);
+                const text = clean(
+                    element.innerText ||
+                    element.textContent
+                );
 
                 return (
                     rect.width > 0 &&
                     rect.height > 0 &&
                     style.display !== "none" &&
-                    style.visibility !== "hidden"
+                    style.visibility !== "hidden" &&
+                    text === "Include all (no filter applied)"
                 );
-            };
-
-            const bodyText = Array.from(
-                document.querySelectorAll("body *")
-            )
-                .filter(visible)
-                .map(element => clean(
-                    element.innerText ||
-                    element.textContent
-                ));
-
-            return (
-                bodyText.includes(
-                    "Include all (no filter applied)"
-                ) ||
-                bodyText.some(
-                    text => text.startsWith("Include all")
-                )
-            );
+            });
         }
         """,
         timeout=20_000,
@@ -440,9 +333,7 @@ def open_owner_sd_filter(page: Page) -> None:
     page.wait_for_timeout(1_000)
 
 
-def find_owner_sd_dialog(
-    page: Page,
-) -> ElementHandle:
+def find_owner_dialog(page: Page) -> ElementHandle:
     handle = page.evaluate_handle(
         """
         () => {
@@ -459,29 +350,28 @@ def find_owner_sd_dialog(
                     rect.right > 0 &&
                     rect.bottom > 0 &&
                     style.display !== "none" &&
-                    style.visibility !== "hidden" &&
-                    Number(style.opacity || 1) > 0
+                    style.visibility !== "hidden"
                 );
             };
 
-            const titles = Array.from(
+            const anchors = Array.from(
                 document.querySelectorAll("body *")
             ).filter(element =>
                 visible(element) &&
                 clean(
                     element.innerText ||
                     element.textContent
-                ) === "Owner SD"
+                ) === "Include all (no filter applied)"
             );
 
             const candidates = [];
 
-            for (const title of titles) {
-                let current = title;
+            for (const anchor of anchors) {
+                let current = anchor;
 
                 for (
                     let level = 0;
-                    level < 14 && current;
+                    level < 16 && current;
                     level += 1
                 ) {
                     const rect =
@@ -492,25 +382,14 @@ def find_owner_sd_dialog(
                         current.textContent
                     );
 
-                    const buttons = Array.from(
-                        current.querySelectorAll(
-                            "button, [role='button']"
-                        )
-                    ).map(button =>
-                        clean(
-                            button.innerText ||
-                            button.textContent
-                        )
-                    );
-
                     if (
                         rect.width >= 500 &&
                         rect.height >= 400 &&
                         rect.width <= window.innerWidth &&
                         rect.height <= window.innerHeight &&
-                        text.includes("Include all") &&
-                        buttons.includes("Apply") &&
-                        buttons.includes("Cancel")
+                        text.includes("Owner SD") &&
+                        text.includes("Apply") &&
+                        text.includes("Cancel")
                     ) {
                         candidates.push({
                             element: current,
@@ -526,10 +405,7 @@ def find_owner_sd_dialog(
                 return null;
             }
 
-            candidates.sort(
-                (a, b) => a.area - b.area
-            );
-
+            candidates.sort((a, b) => a.area - b.area);
             return candidates[0].element;
         }
         """
@@ -542,7 +418,6 @@ def find_owner_sd_dialog(
             path="owner_sd_dialog_not_found.png",
             full_page=True,
         )
-
         raise RuntimeError(
             "Could not identify the Owner SD filter dialog."
         )
@@ -605,8 +480,7 @@ def collect_visible_owner_values(
     values = scroller.evaluate(
         """
         root => {
-            const rootRect =
-                root.getBoundingClientRect();
+            const rootRect = root.getBoundingClientRect();
 
             const clean = value =>
                 (value || "").replace(/\\s+/g, " ").trim();
@@ -650,15 +524,11 @@ def collect_visible_owner_values(
                 ) {
                     const parent = row.parentElement;
 
-                    if (
-                        !parent ||
-                        parent === root
-                    ) {
+                    if (!parent || parent === root) {
                         break;
                     }
 
-                    const rect =
-                        parent.getBoundingClientRect();
+                    const rect = parent.getBoundingClientRect();
 
                     if (
                         rect.height >= 18 &&
@@ -719,49 +589,58 @@ def collect_visible_owner_values(
     return clean_owner_values(values)
 
 
-def click_dialog_button(
-    dialog: ElementHandle,
-    button_text: str,
+def click_text_inside(
+    root: ElementHandle,
+    required_text: str,
 ) -> None:
-    handle = dialog.evaluate_handle(
+    clicked = root.evaluate(
         """
-        (root, requiredText) => {
+        (element, requiredText) => {
             const clean = value =>
                 (value || "").replace(/\\s+/g, " ").trim();
 
-            const buttons = Array.from(
-                root.querySelectorAll(
-                    "button, [role='button']"
-                )
+            const matches = Array.from(
+                element.querySelectorAll("*")
+            ).filter(node =>
+                clean(
+                    node.innerText ||
+                    node.textContent
+                ) === requiredText
             );
 
-            return buttons.find(button =>
-                clean(
-                    button.innerText ||
-                    button.textContent
-                ) === requiredText
-            ) || null;
+            if (!matches.length) {
+                return false;
+            }
+
+            matches.sort((a, b) => {
+                const aRect = a.getBoundingClientRect();
+                const bRect = b.getBoundingClientRect();
+
+                return (
+                    aRect.width * aRect.height -
+                    bRect.width * bRect.height
+                );
+            });
+
+            matches[0].click();
+            return true;
         }
         """,
-        button_text,
+        required_text,
     )
 
-    button = handle.as_element()
-
-    if button is None:
+    if not clicked:
         raise RuntimeError(
-            f'Could not find dialog button "{button_text}".'
+            f'Could not find "{required_text}" inside Owner SD dialog.'
         )
-
-    button.click()
 
 
 def discover_owner_sd_values(
     page: Page,
 ) -> list[str]:
-    open_owner_sd_filter(page)
+    click_owner_sd_filter(page)
 
-    dialog = find_owner_sd_dialog(page)
+    dialog = find_owner_dialog(page)
     scroller = find_owner_list_scroller(dialog)
 
     scroller.evaluate(
@@ -774,11 +653,7 @@ def discover_owner_sd_values(
     previous_scroll_top = -1
 
     for _ in range(100):
-        visible_values = collect_visible_owner_values(
-            scroller
-        )
-
-        for value in visible_values:
+        for value in collect_visible_owner_values(scroller):
             if value not in owner_values:
                 owner_values.append(value)
 
@@ -795,20 +670,16 @@ def discover_owner_sd_values(
         at_bottom = (
             state["scrollTop"] +
             state["clientHeight"]
-            >=
-            state["scrollHeight"] - 5
+            >= state["scrollHeight"] - 5
         )
 
         if (
             at_bottom or
-            state["scrollTop"] ==
-            previous_scroll_top
+            state["scrollTop"] == previous_scroll_top
         ):
             break
 
-        previous_scroll_top = (
-            state["scrollTop"]
-        )
+        previous_scroll_top = state["scrollTop"]
 
         scroller.evaluate(
             """
@@ -827,16 +698,10 @@ def discover_owner_sd_values(
 
         page.wait_for_timeout(600)
 
-    click_dialog_button(
-        dialog,
-        "Cancel",
-    )
-
+    click_text_inside(dialog, "Cancel")
     page.wait_for_timeout(1_000)
 
-    owner_values = clean_owner_values(
-        owner_values
-    )
+    owner_values = clean_owner_values(owner_values)
 
     if not owner_values:
         raise RuntimeError(
@@ -845,57 +710,33 @@ def discover_owner_sd_values(
 
     print(
         f"Owner SD values found "
-        f"({len(owner_values)}): "
-        f"{owner_values}"
+        f"({len(owner_values)}): {owner_values}"
     )
 
     return owner_values
 
 
-def clear_owner_selection(
-    dialog: ElementHandle,
-) -> None:
-    clear_all_handle = dialog.evaluate_handle(
-        """
-        root => {
-            const clean = value =>
-                (value || "").replace(/\\s+/g, " ").trim();
+def clear_owner_selection(dialog: ElementHandle) -> None:
+    try:
+        click_text_inside(dialog, "Clear All")
+    except RuntimeError:
+        dialog.evaluate(
+            """
+            root => {
+                const controls = Array.from(
+                    root.querySelectorAll(
+                        "input[type='checkbox']"
+                    )
+                );
 
-            return Array.from(
-                root.querySelectorAll("*")
-            ).find(element =>
-                clean(
-                    element.innerText ||
-                    element.textContent
-                ) === "Clear All"
-            ) || null;
-        }
-        """
-    )
-
-    clear_all = clear_all_handle.as_element()
-
-    if clear_all is not None:
-        clear_all.click()
-        return
-
-    dialog.evaluate(
-        """
-        root => {
-            const controls = Array.from(
-                root.querySelectorAll(
-                    "input[type='checkbox']"
-                )
-            );
-
-            for (const control of controls) {
-                if (control.checked) {
-                    control.click();
+                for (const control of controls) {
+                    if (control.checked) {
+                        control.click();
+                    }
                 }
             }
-        }
-        """
-    )
+            """
+        )
 
 
 def find_owner_option(
@@ -955,18 +796,13 @@ def find_owner_option(
                 level < 6;
                 level += 1
             ) {
-                const parent =
-                    selected.parentElement;
+                const parent = selected.parentElement;
 
-                if (
-                    !parent ||
-                    parent === root
-                ) {
+                if (!parent || parent === root) {
                     break;
                 }
 
-                const rect =
-                    parent.getBoundingClientRect();
+                const rect = parent.getBoundingClientRect();
 
                 const hasCheckbox = Boolean(
                     parent.querySelector(
@@ -999,35 +835,26 @@ def select_owner_sd(
     page: Page,
     owner_value: str,
 ) -> None:
-    print(
-        f'Selecting Owner SD "{owner_value}".'
-    )
+    print(f'Selecting Owner SD "{owner_value}".')
 
-    open_owner_sd_filter(page)
-
-    dialog = find_owner_sd_dialog(page)
+    click_owner_sd_filter(page)
+    dialog = find_owner_dialog(page)
 
     clear_owner_selection(dialog)
-
     page.wait_for_timeout(500)
 
     search_input = dialog.query_selector(
         "input[placeholder*='Find'], "
         "input[placeholder*='Search'], "
-        "input[type='search']"
+        "input[type='search'], "
+        "input[type='text']"
     )
 
-    if (
-        search_input is not None and
-        search_input.is_visible()
-    ):
+    if search_input is not None and search_input.is_visible():
         search_input.fill(owner_value)
         page.wait_for_timeout(1_200)
 
-    option = find_owner_option(
-        dialog,
-        owner_value,
-    )
+    option = find_owner_option(dialog, owner_value)
 
     if option is None:
         page.screenshot(
@@ -1037,31 +864,18 @@ def select_owner_sd(
             ),
             full_page=True,
         )
-
         raise RuntimeError(
-            f'Could not find Owner SD value '
-            f'"{owner_value}".'
+            f'Could not find Owner SD value "{owner_value}".'
         )
 
-    option.click()
-
+    option.evaluate("element => element.click()")
     page.wait_for_timeout(700)
 
-    click_dialog_button(
-        dialog,
-        "Apply",
-    )
-
+    click_text_inside(dialog, "Apply")
     page.wait_for_timeout(10_000)
 
-    print(
-        f'Owner SD "{owner_value}" applied.'
-    )
+    print(f'Owner SD "{owner_value}" applied.')
 
-
-# ============================================================
-# Chart screenshot
-# ============================================================
 
 def wait_for_chart(page: Page) -> None:
     page.wait_for_function(
@@ -1069,17 +883,11 @@ def wait_for_chart(page: Page) -> None:
         () => Array.from(
             document.querySelectorAll("svg")
         ).some(svg => {
-            const rect =
-                svg.getBoundingClientRect();
-
-            const style =
-                window.getComputedStyle(svg);
-
+            const rect = svg.getBoundingClientRect();
+            const style = window.getComputedStyle(svg);
             const text = (
                 svg.textContent || ""
-            )
-                .replace(/\\s+/g, " ")
-                .trim();
+            ).replace(/\\s+/g, " ").trim();
 
             return (
                 rect.width > 700 &&
@@ -1088,12 +896,8 @@ def wait_for_chart(page: Page) -> None:
                 rect.bottom > 0 &&
                 style.display !== "none" &&
                 style.visibility !== "hidden" &&
-                text.includes(
-                    "Total Call Duration"
-                ) &&
-                text.includes(
-                    "Unique Customers"
-                )
+                text.includes("Total Call Duration") &&
+                text.includes("Unique Customers")
             );
         })
         """,
@@ -1116,26 +920,18 @@ def screenshot_chart_only(
                 document.querySelectorAll("svg")
             )
                 .map(svg => {
-                    const rect =
-                        svg.getBoundingClientRect();
-
-                    const style =
-                        window.getComputedStyle(svg);
-
+                    const rect = svg.getBoundingClientRect();
+                    const style = window.getComputedStyle(svg);
                     const text = (
                         svg.textContent || ""
-                    )
-                        .replace(/\\s+/g, " ")
-                        .trim();
+                    ).replace(/\\s+/g, " ").trim();
 
                     return {
                         svg,
                         rect,
                         style,
                         text,
-                        area:
-                            rect.width *
-                            rect.height
+                        area: rect.width * rect.height
                     };
                 })
                 .filter(item =>
@@ -1145,66 +941,42 @@ def screenshot_chart_only(
                     item.rect.bottom > 0 &&
                     item.style.display !== "none" &&
                     item.style.visibility !== "hidden" &&
-                    item.text.includes(
-                        "Total Call Duration"
-                    ) &&
-                    item.text.includes(
-                        "Unique Customers"
-                    )
+                    item.text.includes("Total Call Duration") &&
+                    item.text.includes("Unique Customers")
                 )
-                .sort(
-                    (a, b) =>
-                        b.area - a.area
-                );
+                .sort((a, b) => b.area - a.area);
 
             if (!candidates.length) {
                 return null;
             }
 
-            const chartSvg =
-                candidates[0].svg;
-
-            const svgRect =
-                chartSvg.getBoundingClientRect();
+            const chartSvg = candidates[0].svg;
+            const svgRect = chartSvg.getBoundingClientRect();
 
             let selected = chartSvg;
-            let current =
-                chartSvg.parentElement;
+            let current = chartSvg.parentElement;
 
             for (
                 let level = 0;
                 level < 10 && current;
                 level += 1,
-                current =
-                    current.parentElement
+                current = current.parentElement
             ) {
-                const rect =
-                    current.getBoundingClientRect();
-
+                const rect = current.getBoundingClientRect();
                 const text = (
                     current.textContent || ""
-                )
-                    .replace(/\\s+/g, " ")
-                    .trim();
+                ).replace(/\\s+/g, " ").trim();
 
                 const reasonable =
-                    rect.width >=
-                        svgRect.width &&
-                    rect.height >=
-                        svgRect.height &&
-                    rect.width -
-                        svgRect.width <= 120 &&
-                    rect.height -
-                        svgRect.height <= 160;
+                    rect.width >= svgRect.width &&
+                    rect.height >= svgRect.height &&
+                    rect.width - svgRect.width <= 120 &&
+                    rect.height - svgRect.height <= 160;
 
                 if (reasonable) {
                     selected = current;
 
-                    if (
-                        text.includes(
-                            "Agent Call Display"
-                        )
-                    ) {
+                    if (text.includes("Agent Call Display")) {
                         break;
                     }
                 }
@@ -1222,31 +994,16 @@ def screenshot_chart_only(
             "Could not locate the Agent Call Display chart."
         )
 
-    chart.screenshot(
-        path=output_path,
-    )
+    chart.screenshot(path=output_path)
+    print(f"Chart screenshot created: {output_path}")
 
-    print(
-        f"Chart screenshot created: "
-        f"{output_path}"
-    )
-
-
-# ============================================================
-# Main
-# ============================================================
 
 def main() -> None:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(
-            headless=True,
-        )
+        browser = playwright.chromium.launch(headless=True)
 
         context = browser.new_context(
-            viewport={
-                "width": 1800,
-                "height": 1100,
-            },
+            viewport={"width": 1800, "height": 1100},
             device_scale_factor=1,
         )
 
@@ -1256,42 +1013,30 @@ def main() -> None:
             login_to_sisense(page)
             open_dashboard(page)
 
-            owner_values = (
-                discover_owner_sd_values(
-                    page
-                )
-            )
+            owner_values = discover_owner_sd_values(page)
 
-            owner_summary = (
+            summary = (
                 "SB Calls Monitor started. "
-                f"Found {len(owner_values)} "
-                "Owner SD values: "
+                f"Found {len(owner_values)} Owner SD values: "
                 + ", ".join(owner_values)
             )
 
-            if len(owner_summary) > 4000:
-                owner_summary = (
+            if len(summary) > 4000:
+                summary = (
                     "SB Calls Monitor started. "
-                    f"Found {len(owner_values)} "
-                    "Owner SD values."
+                    f"Found {len(owner_values)} Owner SD values."
                 )
 
-            send_message(owner_summary)
+            send_message(summary)
 
             for owner_value in owner_values:
                 try:
-                    # Reload dashboard for a clean filter state.
                     open_dashboard(page)
-
-                    select_owner_sd(
-                        page,
-                        owner_value,
-                    )
+                    select_owner_sd(page, owner_value)
 
                     screenshot_path = (
                         f"sb_calls_"
-                        f"{safe_filename(owner_value)}"
-                        ".png"
+                        f"{safe_filename(owner_value)}.png"
                     )
 
                     screenshot_chart_only(
@@ -1299,31 +1044,23 @@ def main() -> None:
                         screenshot_path,
                     )
 
-                    timestamp = (
-                        datetime.now(
-                            timezone.utc
-                        ).strftime(
-                            "%Y-%m-%d %H:%M UTC"
-                        )
-                    )
+                    timestamp = datetime.now(
+                        timezone.utc
+                    ).strftime("%Y-%m-%d %H:%M UTC")
 
                     send_photo(
                         screenshot_path,
                         (
-                            f"Owner SD: "
-                            f"{owner_value}"
-                            f" | SB Calls"
-                            f" | {timestamp}"
+                            f"Owner SD: {owner_value}"
+                            f" | SB Calls | {timestamp}"
                         ),
                     )
 
                 except Exception as owner_error:
                     error_text = (
                         f'Failed for Owner SD '
-                        f'"{owner_value}": '
-                        f"{owner_error}"
+                        f'"{owner_value}": {owner_error}'
                     )
-
                     print(error_text)
                     send_message(error_text)
 
@@ -1346,11 +1083,6 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-
     except Exception as error:
-        print(
-            f"ERROR: {error}",
-            file=sys.stderr,
-        )
-
+        print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)
