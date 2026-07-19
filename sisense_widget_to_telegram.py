@@ -2,20 +2,27 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+from typing import Optional
 
 import requests
-from playwright.sync_api import Page, sync_playwright
+from playwright.sync_api import ElementHandle, Page, sync_playwright
 
+
+# ============================================================
+# Configuration
+# ============================================================
 
 BASE_URL = "https://projectanalytics.sisense.com"
+
 DASHBOARD_ID = "6a4ec462193f10b9e24b4e05"
-WIDGET_ID = "6a4ec71e193f10b9e24b4e20"
 
-LOGIN_URL = f"{BASE_URL}/app/account/login?src={BASE_URL}/app/main"
+LOGIN_URL = (
+    f"{BASE_URL}/app/account/login"
+    f"?src={BASE_URL}/app/main"
+)
 
-WIDGET_URL = (
-    f"{BASE_URL}/app/main/dashboards/"
-    f"{DASHBOARD_ID}/widgets/{WIDGET_ID}"
+DASHBOARD_URL = (
+    f"{BASE_URL}/app/main/dashboards/{DASHBOARD_ID}"
 )
 
 SISENSE_USER = os.environ["SISENSE_USER"]
@@ -25,7 +32,7 @@ BOT_TOKEN = os.environ["SBCALLSM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 
 
-IGNORED_OWNER_TEXTS = {
+IGNORED_OWNER_VALUES = {
     "",
     "Owner SD",
     "Include all (no filter applied)",
@@ -38,7 +45,8 @@ IGNORED_OWNER_TEXTS = {
     "Custom",
     "Apply",
     "Cancel",
-    "1 selected",
+    "No results",
+    "Loading",
 }
 
 
@@ -57,9 +65,13 @@ def send_message(text: str) -> None:
     )
 
     response.raise_for_status()
+    print(f"Telegram message sent: {text}")
 
 
-def send_photo(photo_path: str, caption: str) -> None:
+def send_photo(
+    photo_path: str,
+    caption: str,
+) -> None:
     with open(photo_path, "rb") as photo:
         response = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
@@ -78,6 +90,7 @@ def send_photo(photo_path: str, caption: str) -> None:
         )
 
     response.raise_for_status()
+    print(f"Telegram photo sent: {photo_path}")
 
 
 # ============================================================
@@ -85,23 +98,60 @@ def send_photo(photo_path: str, caption: str) -> None:
 # ============================================================
 
 def safe_filename(value: str) -> str:
-    value = re.sub(
+    filename = re.sub(
         r"[^A-Za-z0-9_-]+",
         "_",
         value.strip(),
     )
 
-    value = re.sub(
+    filename = re.sub(
         r"_+",
         "_",
-        value,
+        filename,
     ).strip("_")
 
-    return value or "unknown_owner"
+    return filename or "unknown_owner_sd"
+
+
+def clean_text(value: str) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        value or "",
+    ).strip()
+
+
+def clean_owner_values(
+    values: list[str],
+) -> list[str]:
+    result: list[str] = []
+
+    for raw_value in values:
+        value = clean_text(raw_value)
+
+        if not value:
+            continue
+
+        if value in IGNORED_OWNER_VALUES:
+            continue
+
+        if value.lower().startswith("include all"):
+            continue
+
+        if value.lower().endswith("selected"):
+            continue
+
+        if len(value) > 100:
+            continue
+
+        if value not in result:
+            result.append(value)
+
+    return result
 
 
 # ============================================================
-# Sisense login and navigation
+# Sisense login and dashboard
 # ============================================================
 
 def login_to_sisense(page: Page) -> None:
@@ -115,21 +165,21 @@ def login_to_sisense(page: Page) -> None:
 
     page.wait_for_timeout(3_000)
 
-    username = page.locator(
+    username_input = page.locator(
         "input[placeholder='Username/Email']"
     )
 
-    password = page.locator(
+    password_input = page.locator(
         "input[placeholder='Password']"
     )
 
-    username.wait_for(
+    username_input.wait_for(
         state="visible",
         timeout=30_000,
     )
 
-    username.fill(SISENSE_USER)
-    password.fill(SISENSE_PASS)
+    username_input.fill(SISENSE_USER)
+    password_input.fill(SISENSE_PASS)
 
     page.get_by_role(
         "button",
@@ -157,92 +207,59 @@ def login_to_sisense(page: Page) -> None:
         )
 
 
-def open_widget(page: Page) -> None:
-    print("Opening Agent Call Display widget.")
+def open_dashboard(page: Page) -> None:
+    print("Opening Calls Monitor dashboard.")
 
     page.goto(
-        WIDGET_URL,
+        DASHBOARD_URL,
         wait_until="domcontentloaded",
         timeout=120_000,
     )
 
-    page.wait_for_timeout(10_000)
+    page.wait_for_timeout(12_000)
 
-    print(f"Widget URL: {page.url}")
+    print(f"Dashboard URL: {page.url}")
 
     if "login" in page.url.lower():
         raise RuntimeError(
             "Sisense redirected back to the login page."
         )
 
+    page.get_by_text(
+        "Calls Monitor",
+        exact=True,
+    ).wait_for(
+        state="visible",
+        timeout=60_000,
+    )
+
 
 # ============================================================
 # Owner SD filter
 # ============================================================
 
-def find_owner_sd_filter_label(page: Page):
-    candidates = page.get_by_text(
-        "Owner SD",
-        exact=True,
-    )
+def find_owner_sd_filter(
+    page: Page,
+) -> ElementHandle:
+    """
+    Find Owner SD specifically in the dashboard's right-side
+    Filters panel, not inside the widget editor or chart.
+    """
 
-    best = None
-    best_x = -1.0
-
-    for index in range(candidates.count()):
-        candidate = candidates.nth(index)
-
-        try:
-            if not candidate.is_visible():
-                continue
-
-            box = candidate.bounding_box()
-
-            if box is not None and box["x"] > best_x:
-                best = candidate
-                best_x = box["x"]
-
-        except Exception:
-            continue
-
-    if best is None:
-        page.screenshot(
-            path="owner_sd_filter_not_found.png",
-            full_page=True,
-        )
-
-        raise RuntimeError(
-            "Could not find the Owner SD dashboard filter."
-        )
-
-    return best
-
-
-def open_owner_sd_filter(page: Page) -> None:
-    label = find_owner_sd_filter_label(page)
-
-    try:
-        label.click(
-            timeout=10_000,
-        )
-
-    except Exception:
-        label.locator(
-            "xpath=.."
-        ).click(
-            timeout=10_000,
-        )
-
-    page.wait_for_timeout(2_000)
-
-
-def find_owner_sd_dialog(page: Page):
     handle = page.evaluate_handle(
         """
         () => {
+            const clean = value =>
+                (value || "")
+                    .replace(/\\s+/g, " ")
+                    .trim();
+
             const visible = element => {
-                const rect = element.getBoundingClientRect();
-                const style = window.getComputedStyle(element);
+                const rect =
+                    element.getBoundingClientRect();
+
+                const style =
+                    window.getComputedStyle(element);
 
                 return (
                     rect.width > 0 &&
@@ -255,10 +272,160 @@ def find_owner_sd_dialog(page: Page):
                 );
             };
 
+            const matches = Array.from(
+                document.querySelectorAll("body *")
+            ).filter(element => {
+                if (!visible(element)) {
+                    return false;
+                }
+
+                const rect =
+                    element.getBoundingClientRect();
+
+                const text = clean(
+                    element.innerText ||
+                    element.textContent
+                );
+
+                return (
+                    text === "Owner SD" &&
+                    rect.left >
+                        window.innerWidth * 0.70
+                );
+            });
+
+            if (!matches.length) {
+                return null;
+            }
+
+            matches.sort((a, b) => {
+                const aRect =
+                    a.getBoundingClientRect();
+
+                const bRect =
+                    b.getBoundingClientRect();
+
+                return (
+                    aRect.width * aRect.height -
+                    bRect.width * bRect.height
+                );
+            });
+
+            let selected = matches[0];
+
+            /*
+             * Move upward to the clickable filter card,
+             * but do not select the whole Filters panel.
+             */
+            for (
+                let level = 0;
+                level < 7;
+                level += 1
+            ) {
+                const parent =
+                    selected.parentElement;
+
+                if (!parent) {
+                    break;
+                }
+
+                const rect =
+                    parent.getBoundingClientRect();
+
+                const text = clean(
+                    parent.innerText ||
+                    parent.textContent
+                );
+
+                if (
+                    rect.width >= 150 &&
+                    rect.width <= 500 &&
+                    rect.height >= 30 &&
+                    rect.height <= 180 &&
+                    text.includes("Owner SD")
+                ) {
+                    selected = parent;
+                } else {
+                    break;
+                }
+            }
+
+            return selected;
+        }
+        """
+    )
+
+    owner_filter = handle.as_element()
+
+    if owner_filter is None:
+        page.screenshot(
+            path="owner_sd_filter_not_found.png",
+            full_page=True,
+        )
+
+        raise RuntimeError(
+            "Could not find Owner SD in the dashboard Filters panel."
+        )
+
+    return owner_filter
+
+
+def open_owner_sd_filter(page: Page) -> None:
+    print("Opening Owner SD dashboard filter.")
+
+    owner_filter = find_owner_sd_filter(page)
+
+    owner_filter.scroll_into_view_if_needed()
+
+    owner_filter.click(
+        force=True,
+        timeout=15_000,
+    )
+
+    page.wait_for_timeout(2_500)
+
+    page.get_by_text(
+        "Include all (no filter applied)",
+        exact=True,
+    ).wait_for(
+        state="visible",
+        timeout=20_000,
+    )
+
+
+def find_owner_sd_dialog(
+    page: Page,
+) -> ElementHandle:
+    """
+    Locate the modal filter window whose title is Owner SD
+    and which contains Apply and Cancel.
+    """
+
+    handle = page.evaluate_handle(
+        """
+        () => {
             const clean = value =>
                 (value || "")
                     .replace(/\\s+/g, " ")
                     .trim();
+
+            const visible = element => {
+                const rect =
+                    element.getBoundingClientRect();
+
+                const style =
+                    window.getComputedStyle(element);
+
+                return (
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    rect.right > 0 &&
+                    rect.bottom > 0 &&
+                    style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    Number(style.opacity || 1) > 0
+                );
+            };
 
             const titles = Array.from(
                 document.querySelectorAll("body *")
@@ -270,48 +437,71 @@ def find_owner_sd_dialog(page: Page):
                 ) === "Owner SD"
             );
 
+            const candidates = [];
+
             for (const title of titles) {
                 let current = title;
 
                 for (
                     let level = 0;
-                    level < 12 && current;
+                    level < 14 && current;
                     level += 1
                 ) {
+                    const rect =
+                        current.getBoundingClientRect();
+
                     const text = clean(
                         current.innerText ||
                         current.textContent
                     );
 
-                    const rect =
-                        current.getBoundingClientRect();
-
                     const buttons = Array.from(
                         current.querySelectorAll(
                             "button, [role='button']"
                         )
-                    ).map(element =>
+                    ).map(button =>
                         clean(
-                            element.innerText ||
-                            element.textContent
+                            button.innerText ||
+                            button.textContent
                         )
                     );
 
                     if (
                         rect.width >= 500 &&
                         rect.height >= 400 &&
+                        rect.width <=
+                            window.innerWidth &&
+                        rect.height <=
+                            window.innerHeight &&
+                        text.includes(
+                            "Include all"
+                        ) &&
                         buttons.includes("Apply") &&
-                        buttons.includes("Cancel") &&
-                        text.includes("Include all")
+                        buttons.includes("Cancel")
                     ) {
-                        return current;
+                        candidates.push({
+                            element: current,
+                            area:
+                                rect.width *
+                                rect.height
+                        });
                     }
 
-                    current = current.parentElement;
+                    current =
+                        current.parentElement;
                 }
             }
 
-            return null;
+            if (!candidates.length) {
+                return null;
+            }
+
+            candidates.sort(
+                (a, b) =>
+                    a.area - b.area
+            );
+
+            return candidates[0].element;
         }
         """
     )
@@ -331,7 +521,9 @@ def find_owner_sd_dialog(page: Page):
     return dialog
 
 
-def find_owner_list_scroller(dialog):
+def find_owner_list_scroller(
+    dialog: ElementHandle,
+) -> ElementHandle:
     handle = dialog.evaluate_handle(
         """
         root => {
@@ -341,11 +533,11 @@ def find_owner_list_scroller(dialog):
                 .filter(element =>
                     element.scrollHeight >
                         element.clientHeight + 20 &&
-                    element.clientHeight >= 120 &&
-                    element.clientWidth >= 200
+                    element.clientHeight >= 100 &&
+                    element.clientWidth >= 180
                 )
                 .map(element => ({
-                    element: element,
+                    element,
                     range:
                         element.scrollHeight -
                         element.clientHeight,
@@ -353,11 +545,13 @@ def find_owner_list_scroller(dialog):
                         element.clientWidth *
                         element.clientHeight
                 }))
-                .sort((a, b) =>
-                    b.range !== a.range
-                        ? b.range - a.range
-                        : b.area - a.area
-                );
+                .sort((a, b) => {
+                    if (a.range !== b.range) {
+                        return b.range - a.range;
+                    }
+
+                    return b.area - a.area;
+                });
 
             return candidates.length
                 ? candidates[0].element
@@ -370,21 +564,25 @@ def find_owner_list_scroller(dialog):
 
     if scroller is None:
         raise RuntimeError(
-            "Could not find the Owner SD scrollable list."
+            "Could not find the Owner SD values list."
         )
 
     return scroller
 
 
 def collect_visible_owner_values(
-    scroller,
+    scroller: ElementHandle,
 ) -> list[str]:
-
     values = scroller.evaluate(
         """
         root => {
             const rootRect =
                 root.getBoundingClientRect();
+
+            const clean = value =>
+                (value || "")
+                    .replace(/\\s+/g, " ")
+                    .trim();
 
             const visible = element => {
                 const rect =
@@ -403,12 +601,7 @@ def collect_visible_owner_values(
                 );
             };
 
-            const clean = value =>
-                (value || "")
-                    .replace(/\\s+/g, " ")
-                    .trim();
-
-            const results = [];
+            const result = [];
 
             const controls = Array.from(
                 root.querySelectorAll(
@@ -445,7 +638,7 @@ def collect_visible_owner_values(
                         parent.getBoundingClientRect();
 
                     if (
-                        rect.height >= 20 &&
+                        rect.height >= 18 &&
                         rect.height <= 70
                     ) {
                         row = parent;
@@ -465,17 +658,17 @@ def collect_visible_owner_values(
                 if (
                     text &&
                     text.length <= 100 &&
-                    !results.includes(text)
+                    !result.includes(text)
                 ) {
-                    results.push(text);
+                    result.push(text);
                 }
             }
 
             /*
-             * Fallback for Sisense versions where
-             * checkboxes have no semantic attributes.
+             * Fallback for a Sisense list without
+             * semantic checkbox attributes.
              */
-            if (!results.length) {
+            if (!result.length) {
                 const leaves = Array.from(
                     root.querySelectorAll(
                         "span, label, div"
@@ -494,65 +687,40 @@ def collect_visible_owner_values(
                     if (
                         text &&
                         text.length <= 100 &&
-                        !results.includes(text)
+                        !result.includes(text)
                     ) {
-                        results.push(text);
+                        result.push(text);
                     }
                 }
             }
 
-            return results;
+            return result;
         }
         """
     )
 
-    cleaned = []
-
-    for value in values:
-        value = re.sub(
-            r"\s+",
-            " ",
-            value,
-        ).strip()
-
-        if not value:
-            continue
-
-        if value in IGNORED_OWNER_TEXTS:
-            continue
-
-        if value.lower().startswith(
-            "include all"
-        ):
-            continue
-
-        if value.lower().endswith(
-            "selected"
-        ):
-            continue
-
-        if value not in cleaned:
-            cleaned.append(value)
-
-    return cleaned
+    return clean_owner_values(values)
 
 
 def discover_owner_sd_values(
     page: Page,
 ) -> list[str]:
-
     open_owner_sd_filter(page)
 
     dialog = find_owner_sd_dialog(page)
     scroller = find_owner_list_scroller(dialog)
 
     scroller.evaluate(
-        "element => { element.scrollTop = 0; }"
+        """
+        element => {
+            element.scrollTop = 0;
+        }
+        """
     )
 
-    page.wait_for_timeout(500)
+    page.wait_for_timeout(700)
 
-    owners: list[str] = []
+    owner_values: list[str] = []
     previous_scroll_top = -1
 
     for _ in range(100):
@@ -563,8 +731,8 @@ def discover_owner_sd_values(
         )
 
         for value in visible_values:
-            if value not in owners:
-                owners.append(value)
+            if value not in owner_values:
+                owner_values.append(value)
 
         state = scroller.evaluate(
             """
@@ -582,8 +750,7 @@ def discover_owner_sd_values(
         at_bottom = (
             state["scrollTop"] +
             state["clientHeight"]
-            >=
-            state["scrollHeight"] - 5
+            >= state["scrollHeight"] - 5
         )
 
         if (
@@ -603,7 +770,8 @@ def discover_owner_sd_values(
                 element.scrollTop = Math.min(
                     element.scrollTop +
                     Math.max(
-                        element.clientHeight * 0.8,
+                        element.clientHeight *
+                            0.8,
                         120
                     ),
                     element.scrollHeight
@@ -612,32 +780,76 @@ def discover_owner_sd_values(
             """
         )
 
-        page.wait_for_timeout(500)
+        page.wait_for_timeout(600)
 
-    page.keyboard.press("Escape")
-    page.wait_for_timeout(800)
+    page.get_by_role(
+        "button",
+        name="Cancel",
+    ).last.click()
 
-    if not owners:
+    page.wait_for_timeout(1_000)
+
+    owner_values = clean_owner_values(
+        owner_values
+    )
+
+    if not owner_values:
         raise RuntimeError(
-            "No Owner SD values were found."
+            "No Owner SD values were discovered."
         )
 
     print(
         f"Owner SD values found "
-        f"({len(owners)}): {owners}"
+        f"({len(owner_values)}): "
+        f"{owner_values}"
     )
 
-    return owners
+    return owner_values
+
+
+def clear_owner_selection(
+    dialog: ElementHandle,
+) -> None:
+    clear_all = dialog.get_by_text(
+        "Clear All",
+        exact=True,
+    )
+
+    if clear_all.count() > 0:
+        clear_all.first.click()
+        return
+
+    dialog.evaluate(
+        """
+        root => {
+            const controls = Array.from(
+                root.querySelectorAll(
+                    "input[type='checkbox']"
+                )
+            );
+
+            for (const control of controls) {
+                if (control.checked) {
+                    control.click();
+                }
+            }
+        }
+        """
+    )
 
 
 def find_owner_option(
-    dialog,
+    dialog: ElementHandle,
     owner_value: str,
-):
-
+) -> Optional[ElementHandle]:
     handle = dialog.evaluate_handle(
         """
         (root, requiredValue) => {
+            const clean = value =>
+                (value || "")
+                    .replace(/\\s+/g, " ")
+                    .trim();
+
             const visible = element => {
                 const rect =
                     element.getBoundingClientRect();
@@ -652,11 +864,6 @@ def find_owner_option(
                     style.visibility !== "hidden"
                 );
             };
-
-            const clean = value =>
-                (value || "")
-                    .replace(/\\s+/g, " ")
-                    .trim();
 
             const matches = Array.from(
                 root.querySelectorAll("*")
@@ -691,16 +898,15 @@ def find_owner_option(
                 return null;
             }
 
-            const match = matches[0];
-            let current = match;
+            let selected = matches[0];
 
             for (
                 let level = 0;
-                level < 5;
+                level < 6;
                 level += 1
             ) {
                 const parent =
-                    current.parentElement;
+                    selected.parentElement;
 
                 if (
                     !parent ||
@@ -721,16 +927,16 @@ def find_owner_option(
 
                 if (
                     hasCheckbox &&
-                    rect.height >= 20 &&
-                    rect.height <= 80
+                    rect.height >= 18 &&
+                    rect.height <= 90
                 ) {
                     return parent;
                 }
 
-                current = parent;
+                selected = parent;
             }
 
-            return match;
+            return matches[0];
         }
         """,
         owner_value,
@@ -739,87 +945,33 @@ def find_owner_option(
     return handle.as_element()
 
 
-def option_is_selected(option) -> bool:
-    return bool(
-        option.evaluate(
-            """
-            element => {
-                let current = element;
-
-                for (
-                    let level = 0;
-                    level < 5 && current;
-                    level += 1
-                ) {
-                    const checkbox =
-                        current.matches(
-                            "input[type='checkbox']"
-                        )
-                            ? current
-                            : current.querySelector(
-                                "input[type='checkbox']"
-                            );
-
-                    if (
-                        checkbox &&
-                        checkbox.checked
-                    ) {
-                        return true;
-                    }
-
-                    if (
-                        current.getAttribute(
-                            "aria-checked"
-                        ) === "true"
-                    ) {
-                        return true;
-                    }
-
-                    if (
-                        current.getAttribute(
-                            "aria-selected"
-                        ) === "true"
-                    ) {
-                        return true;
-                    }
-
-                    current =
-                        current.parentElement;
-                }
-
-                return false;
-            }
-            """
-        )
-    )
-
-
 def select_owner_sd(
     page: Page,
     owner_value: str,
 ) -> None:
-
     print(
-        f'Selecting Owner SD '
-        f'"{owner_value}".'
+        f'Selecting Owner SD "{owner_value}".'
     )
 
     open_owner_sd_filter(page)
 
     dialog = find_owner_sd_dialog(page)
 
-    search = dialog.query_selector(
+    clear_owner_selection(dialog)
+
+    page.wait_for_timeout(500)
+
+    search_input = dialog.query_selector(
         "input[placeholder*='Find'], "
         "input[placeholder*='Search'], "
-        "input[type='search'], "
-        "input[type='text']"
+        "input[type='search']"
     )
 
     if (
-        search is not None and
-        search.is_visible()
+        search_input is not None and
+        search_input.is_visible()
     ):
-        search.fill(owner_value)
+        search_input.fill(owner_value)
         page.wait_for_timeout(1_200)
 
     option = find_owner_option(
@@ -828,15 +980,23 @@ def select_owner_sd(
     )
 
     if option is None:
-        raise RuntimeError(
-            f'Could not find Owner SD '
-            f'value "{owner_value}" '
-            f'in the filter.'
+        page.screenshot(
+            path=(
+                "owner_sd_value_not_found_"
+                f"{safe_filename(owner_value)}"
+                ".png"
+            ),
+            full_page=True,
         )
 
-    if not option_is_selected(option):
-        option.click()
-        page.wait_for_timeout(700)
+        raise RuntimeError(
+            f'Could not find Owner SD value '
+            f'"{owner_value}".'
+        )
+
+    option.click()
+
+    page.wait_for_timeout(700)
 
     apply_button = dialog.get_by_role(
         "button",
@@ -845,13 +1005,12 @@ def select_owner_sd(
 
     if apply_button.count() == 0:
         raise RuntimeError(
-            "Could not find the Owner SD "
-            "Apply button."
+            "Could not find the Owner SD Apply button."
         )
 
-    apply_button.click()
+    apply_button.first.click()
 
-    page.wait_for_timeout(8_000)
+    page.wait_for_timeout(10_000)
 
     print(
         f'Owner SD "{owner_value}" applied.'
@@ -859,7 +1018,7 @@ def select_owner_sd(
 
 
 # ============================================================
-# Chart detection and screenshot
+# Chart screenshot
 # ============================================================
 
 def wait_for_chart(page: Page) -> None:
@@ -882,7 +1041,7 @@ def wait_for_chart(page: Page) -> None:
 
             return (
                 rect.width > 700 &&
-                rect.height > 400 &&
+                rect.height > 350 &&
                 rect.right > 0 &&
                 rect.bottom > 0 &&
                 style.display !== "none" &&
@@ -906,7 +1065,6 @@ def screenshot_chart_only(
     page: Page,
     output_path: str,
 ) -> None:
-
     wait_for_chart(page)
 
     handle = page.evaluate_handle(
@@ -929,10 +1087,10 @@ def screenshot_chart_only(
                         .trim();
 
                     return {
-                        svg: svg,
-                        rect: rect,
-                        style: style,
-                        text: text,
+                        svg,
+                        rect,
+                        style,
+                        text,
                         area:
                             rect.width *
                             rect.height
@@ -940,7 +1098,7 @@ def screenshot_chart_only(
                 })
                 .filter(item =>
                     item.rect.width > 700 &&
-                    item.rect.height > 400 &&
+                    item.rect.height > 350 &&
                     item.rect.right > 0 &&
                     item.rect.bottom > 0 &&
                     item.style.display !== "none" &&
@@ -973,9 +1131,10 @@ def screenshot_chart_only(
 
             for (
                 let level = 0;
-                level < 8 && current;
+                level < 10 && current;
                 level += 1,
-                current = current.parentElement
+                current =
+                    current.parentElement
             ) {
                 const rect =
                     current.getBoundingClientRect();
@@ -987,12 +1146,14 @@ def screenshot_chart_only(
                     .trim();
 
                 const reasonable =
-                    rect.width >= svgRect.width &&
-                    rect.height >= svgRect.height &&
+                    rect.width >=
+                        svgRect.width &&
+                    rect.height >=
+                        svgRect.height &&
                     rect.width -
-                        svgRect.width <= 100 &&
+                        svgRect.width <= 120 &&
                     rect.height -
-                        svgRect.height <= 120;
+                        svgRect.height <= 160;
 
                 if (reasonable) {
                     selected = current;
@@ -1016,8 +1177,7 @@ def screenshot_chart_only(
 
     if chart is None:
         raise RuntimeError(
-            "Could not locate the "
-            "chart container."
+            "Could not locate the Agent Call Display chart."
         )
 
     chart.screenshot(
@@ -1025,7 +1185,7 @@ def screenshot_chart_only(
     )
 
     print(
-        f"Screenshot created: "
+        f"Chart screenshot created: "
         f"{output_path}"
     )
 
@@ -1052,7 +1212,7 @@ def main() -> None:
 
         try:
             login_to_sisense(page)
-            open_widget(page)
+            open_dashboard(page)
 
             owner_values = (
                 discover_owner_sd_values(
@@ -1069,9 +1229,9 @@ def main() -> None:
 
             for owner_value in owner_values:
                 try:
-                    # Reload the widget so every Owner SD
-                    # starts from a clean page state.
-                    open_widget(page)
+                    # Reload the dashboard for a clean
+                    # filter state on every iteration.
+                    open_dashboard(page)
 
                     select_owner_sd(
                         page,
@@ -1081,7 +1241,7 @@ def main() -> None:
                     screenshot_path = (
                         f"sb_calls_"
                         f"{safe_filename(owner_value)}"
-                        f".png"
+                        ".png"
                     )
 
                     screenshot_chart_only(
@@ -1115,17 +1275,12 @@ def main() -> None:
                     )
 
                     print(error_text)
-
-                    send_message(
-                        error_text
-                    )
+                    send_message(error_text)
 
         except Exception:
             try:
                 page.screenshot(
-                    path=(
-                        "sb_calls_error_debug.png"
-                    ),
+                    path="sb_calls_error_debug.png",
                     full_page=True,
                 )
             except Exception:
