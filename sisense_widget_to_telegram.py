@@ -13,7 +13,6 @@ from playwright.sync_api import ElementHandle, Page, sync_playwright
 # ============================================================
 
 BASE_URL = "https://projectanalytics.sisense.com"
-
 DASHBOARD_ID = "6a4ec462193f10b9e24b4e05"
 
 LOGIN_URL = (
@@ -30,7 +29,6 @@ SISENSE_PASS = os.environ["SISENSE_PASS"]
 
 BOT_TOKEN = os.environ["SBCALLSM_BOT_TOKEN"]
 CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-
 
 IGNORED_OWNER_VALUES = {
     "",
@@ -68,10 +66,7 @@ def send_message(text: str) -> None:
     print(f"Telegram message sent: {text}")
 
 
-def send_photo(
-    photo_path: str,
-    caption: str,
-) -> None:
+def send_photo(photo_path: str, caption: str) -> None:
     with open(photo_path, "rb") as photo:
         response = requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
@@ -97,6 +92,14 @@ def send_photo(
 # General helpers
 # ============================================================
 
+def clean_text(value: str) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        value or "",
+    ).strip()
+
+
 def safe_filename(value: str) -> str:
     filename = re.sub(
         r"[^A-Za-z0-9_-]+",
@@ -111,14 +114,6 @@ def safe_filename(value: str) -> str:
     ).strip("_")
 
     return filename or "unknown_owner_sd"
-
-
-def clean_text(value: str) -> str:
-    return re.sub(
-        r"\s+",
-        " ",
-        value or "",
-    ).strip()
 
 
 def clean_owner_values(
@@ -191,6 +186,7 @@ def login_to_sisense(page: Page) -> None:
             "**/app/main/**",
             timeout=60_000,
         )
+
     except Exception:
         page.wait_for_timeout(8_000)
 
@@ -216,22 +212,62 @@ def open_dashboard(page: Page) -> None:
         timeout=120_000,
     )
 
-    page.wait_for_timeout(12_000)
-
-    print(f"Dashboard URL: {page.url}")
-
     if "login" in page.url.lower():
         raise RuntimeError(
             "Sisense redirected back to the login page."
         )
 
-    page.get_by_text(
-        "Calls Monitor",
-        exact=True,
-    ).wait_for(
-        state="visible",
-        timeout=60_000,
+    # Do not wait for "Calls Monitor" because Sisense renders it twice:
+    # once in the dashboard title and once in the navigation tree.
+    # Wait for the exact Owner SD filter on the right side instead.
+    page.wait_for_function(
+        """
+        () => {
+            const clean = value =>
+                (value || "").replace(/\\s+/g, " ").trim();
+
+            const visible = element => {
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
+
+                return (
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    rect.right > 0 &&
+                    rect.bottom > 0 &&
+                    style.display !== "none" &&
+                    style.visibility !== "hidden" &&
+                    Number(style.opacity || 1) > 0
+                );
+            };
+
+            return Array.from(
+                document.querySelectorAll("body *")
+            ).some(element => {
+                if (!visible(element)) {
+                    return false;
+                }
+
+                const rect = element.getBoundingClientRect();
+
+                const text = clean(
+                    element.innerText ||
+                    element.textContent
+                );
+
+                return (
+                    text === "Owner SD" &&
+                    rect.left > window.innerWidth * 0.70
+                );
+            });
+        }
+        """,
+        timeout=90_000,
     )
+
+    page.wait_for_timeout(4_000)
+
+    print(f"Dashboard URL: {page.url}")
 
 
 # ============================================================
@@ -241,25 +277,15 @@ def open_dashboard(page: Page) -> None:
 def find_owner_sd_filter(
     page: Page,
 ) -> ElementHandle:
-    """
-    Find Owner SD specifically in the dashboard's right-side
-    Filters panel, not inside the widget editor or chart.
-    """
-
     handle = page.evaluate_handle(
         """
         () => {
             const clean = value =>
-                (value || "")
-                    .replace(/\\s+/g, " ")
-                    .trim();
+                (value || "").replace(/\\s+/g, " ").trim();
 
             const visible = element => {
-                const rect =
-                    element.getBoundingClientRect();
-
-                const style =
-                    window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
 
                 return (
                     rect.width > 0 &&
@@ -279,8 +305,7 @@ def find_owner_sd_filter(
                     return false;
                 }
 
-                const rect =
-                    element.getBoundingClientRect();
+                const rect = element.getBoundingClientRect();
 
                 const text = clean(
                     element.innerText ||
@@ -289,8 +314,7 @@ def find_owner_sd_filter(
 
                 return (
                     text === "Owner SD" &&
-                    rect.left >
-                        window.innerWidth * 0.70
+                    rect.left > window.innerWidth * 0.70
                 );
             });
 
@@ -299,11 +323,8 @@ def find_owner_sd_filter(
             }
 
             matches.sort((a, b) => {
-                const aRect =
-                    a.getBoundingClientRect();
-
-                const bRect =
-                    b.getBoundingClientRect();
+                const aRect = a.getBoundingClientRect();
+                const bRect = b.getBoundingClientRect();
 
                 return (
                     aRect.width * aRect.height -
@@ -313,24 +334,18 @@ def find_owner_sd_filter(
 
             let selected = matches[0];
 
-            /*
-             * Move upward to the clickable filter card,
-             * but do not select the whole Filters panel.
-             */
             for (
                 let level = 0;
                 level < 7;
                 level += 1
             ) {
-                const parent =
-                    selected.parentElement;
+                const parent = selected.parentElement;
 
                 if (!parent) {
                     break;
                 }
 
-                const rect =
-                    parent.getBoundingClientRect();
+                const rect = parent.getBoundingClientRect();
 
                 const text = clean(
                     parent.innerText ||
@@ -382,39 +397,61 @@ def open_owner_sd_filter(page: Page) -> None:
         timeout=15_000,
     )
 
-    page.wait_for_timeout(2_500)
+    page.wait_for_function(
+        """
+        () => {
+            const clean = value =>
+                (value || "").replace(/\\s+/g, " ").trim();
 
-    page.get_by_text(
-        "Include all (no filter applied)",
-        exact=True,
-    ).wait_for(
-        state="visible",
+            const visible = element => {
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
+
+                return (
+                    rect.width > 0 &&
+                    rect.height > 0 &&
+                    style.display !== "none" &&
+                    style.visibility !== "hidden"
+                );
+            };
+
+            const bodyText = Array.from(
+                document.querySelectorAll("body *")
+            )
+                .filter(visible)
+                .map(element => clean(
+                    element.innerText ||
+                    element.textContent
+                ));
+
+            return (
+                bodyText.includes(
+                    "Include all (no filter applied)"
+                ) ||
+                bodyText.some(
+                    text => text.startsWith("Include all")
+                )
+            );
+        }
+        """,
         timeout=20_000,
     )
+
+    page.wait_for_timeout(1_000)
 
 
 def find_owner_sd_dialog(
     page: Page,
 ) -> ElementHandle:
-    """
-    Locate the modal filter window whose title is Owner SD
-    and which contains Apply and Cancel.
-    """
-
     handle = page.evaluate_handle(
         """
         () => {
             const clean = value =>
-                (value || "")
-                    .replace(/\\s+/g, " ")
-                    .trim();
+                (value || "").replace(/\\s+/g, " ").trim();
 
             const visible = element => {
-                const rect =
-                    element.getBoundingClientRect();
-
-                const style =
-                    window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
 
                 return (
                     rect.width > 0 &&
@@ -469,26 +506,19 @@ def find_owner_sd_dialog(
                     if (
                         rect.width >= 500 &&
                         rect.height >= 400 &&
-                        rect.width <=
-                            window.innerWidth &&
-                        rect.height <=
-                            window.innerHeight &&
-                        text.includes(
-                            "Include all"
-                        ) &&
+                        rect.width <= window.innerWidth &&
+                        rect.height <= window.innerHeight &&
+                        text.includes("Include all") &&
                         buttons.includes("Apply") &&
                         buttons.includes("Cancel")
                     ) {
                         candidates.push({
                             element: current,
-                            area:
-                                rect.width *
-                                rect.height
+                            area: rect.width * rect.height
                         });
                     }
 
-                    current =
-                        current.parentElement;
+                    current = current.parentElement;
                 }
             }
 
@@ -497,8 +527,7 @@ def find_owner_sd_dialog(
             }
 
             candidates.sort(
-                (a, b) =>
-                    a.area - b.area
+                (a, b) => a.area - b.area
             );
 
             return candidates[0].element;
@@ -580,16 +609,11 @@ def collect_visible_owner_values(
                 root.getBoundingClientRect();
 
             const clean = value =>
-                (value || "")
-                    .replace(/\\s+/g, " ")
-                    .trim();
+                (value || "").replace(/\\s+/g, " ").trim();
 
             const visible = element => {
-                const rect =
-                    element.getBoundingClientRect();
-
-                const style =
-                    window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
 
                 return (
                     rect.width > 0 &&
@@ -624,8 +648,7 @@ def collect_visible_owner_values(
                     level < 5;
                     level += 1
                 ) {
-                    const parent =
-                        row.parentElement;
+                    const parent = row.parentElement;
 
                     if (
                         !parent ||
@@ -650,9 +673,7 @@ def collect_visible_owner_values(
                 const text = clean(
                     row.innerText ||
                     row.textContent ||
-                    control.getAttribute(
-                        "aria-label"
-                    )
+                    control.getAttribute("aria-label")
                 );
 
                 if (
@@ -664,10 +685,6 @@ def collect_visible_owner_values(
                 }
             }
 
-            /*
-             * Fallback for a Sisense list without
-             * semantic checkbox attributes.
-             */
             if (!result.length) {
                 const leaves = Array.from(
                     root.querySelectorAll(
@@ -702,6 +719,43 @@ def collect_visible_owner_values(
     return clean_owner_values(values)
 
 
+def click_dialog_button(
+    dialog: ElementHandle,
+    button_text: str,
+) -> None:
+    handle = dialog.evaluate_handle(
+        """
+        (root, requiredText) => {
+            const clean = value =>
+                (value || "").replace(/\\s+/g, " ").trim();
+
+            const buttons = Array.from(
+                root.querySelectorAll(
+                    "button, [role='button']"
+                )
+            );
+
+            return buttons.find(button =>
+                clean(
+                    button.innerText ||
+                    button.textContent
+                ) === requiredText
+            ) || null;
+        }
+        """,
+        button_text,
+    )
+
+    button = handle.as_element()
+
+    if button is None:
+        raise RuntimeError(
+            f'Could not find dialog button "{button_text}".'
+        )
+
+    button.click()
+
+
 def discover_owner_sd_values(
     page: Page,
 ) -> list[str]:
@@ -711,11 +765,7 @@ def discover_owner_sd_values(
     scroller = find_owner_list_scroller(dialog)
 
     scroller.evaluate(
-        """
-        element => {
-            element.scrollTop = 0;
-        }
-        """
+        "element => { element.scrollTop = 0; }"
     )
 
     page.wait_for_timeout(700)
@@ -724,10 +774,8 @@ def discover_owner_sd_values(
     previous_scroll_top = -1
 
     for _ in range(100):
-        visible_values = (
-            collect_visible_owner_values(
-                scroller
-            )
+        visible_values = collect_visible_owner_values(
+            scroller
         )
 
         for value in visible_values:
@@ -737,12 +785,9 @@ def discover_owner_sd_values(
         state = scroller.evaluate(
             """
             element => ({
-                scrollTop:
-                    element.scrollTop,
-                clientHeight:
-                    element.clientHeight,
-                scrollHeight:
-                    element.scrollHeight
+                scrollTop: element.scrollTop,
+                clientHeight: element.clientHeight,
+                scrollHeight: element.scrollHeight
             })
             """
         )
@@ -750,7 +795,8 @@ def discover_owner_sd_values(
         at_bottom = (
             state["scrollTop"] +
             state["clientHeight"]
-            >= state["scrollHeight"] - 5
+            >=
+            state["scrollHeight"] - 5
         )
 
         if (
@@ -770,8 +816,7 @@ def discover_owner_sd_values(
                 element.scrollTop = Math.min(
                     element.scrollTop +
                     Math.max(
-                        element.clientHeight *
-                            0.8,
+                        element.clientHeight * 0.8,
                         120
                     ),
                     element.scrollHeight
@@ -782,10 +827,10 @@ def discover_owner_sd_values(
 
         page.wait_for_timeout(600)
 
-    page.get_by_role(
-        "button",
-        name="Cancel",
-    ).last.click()
+    click_dialog_button(
+        dialog,
+        "Cancel",
+    )
 
     page.wait_for_timeout(1_000)
 
@@ -810,13 +855,28 @@ def discover_owner_sd_values(
 def clear_owner_selection(
     dialog: ElementHandle,
 ) -> None:
-    clear_all = dialog.get_by_text(
-        "Clear All",
-        exact=True,
+    clear_all_handle = dialog.evaluate_handle(
+        """
+        root => {
+            const clean = value =>
+                (value || "").replace(/\\s+/g, " ").trim();
+
+            return Array.from(
+                root.querySelectorAll("*")
+            ).find(element =>
+                clean(
+                    element.innerText ||
+                    element.textContent
+                ) === "Clear All"
+            ) || null;
+        }
+        """
     )
 
-    if clear_all.count() > 0:
-        clear_all.first.click()
+    clear_all = clear_all_handle.as_element()
+
+    if clear_all is not None:
+        clear_all.click()
         return
 
     dialog.evaluate(
@@ -846,16 +906,11 @@ def find_owner_option(
         """
         (root, requiredValue) => {
             const clean = value =>
-                (value || "")
-                    .replace(/\\s+/g, " ")
-                    .trim();
+                (value || "").replace(/\\s+/g, " ").trim();
 
             const visible = element => {
-                const rect =
-                    element.getBoundingClientRect();
-
-                const style =
-                    window.getComputedStyle(element);
+                const rect = element.getBoundingClientRect();
+                const style = window.getComputedStyle(element);
 
                 return (
                     rect.width > 0 &&
@@ -873,9 +928,7 @@ def find_owner_option(
                     clean(
                         element.innerText ||
                         element.textContent ||
-                        element.getAttribute(
-                            "aria-label"
-                        )
+                        element.getAttribute("aria-label")
                     ) === requiredValue
                 )
                 .sort((a, b) => {
@@ -886,11 +939,8 @@ def find_owner_option(
                         b.getBoundingClientRect();
 
                     return (
-                        aRect.width *
-                        aRect.height
-                    ) - (
-                        bRect.width *
-                        bRect.height
+                        aRect.width * aRect.height -
+                        bRect.width * bRect.height
                     );
                 });
 
@@ -983,8 +1033,7 @@ def select_owner_sd(
         page.screenshot(
             path=(
                 "owner_sd_value_not_found_"
-                f"{safe_filename(owner_value)}"
-                ".png"
+                f"{safe_filename(owner_value)}.png"
             ),
             full_page=True,
         )
@@ -998,17 +1047,10 @@ def select_owner_sd(
 
     page.wait_for_timeout(700)
 
-    apply_button = dialog.get_by_role(
-        "button",
-        name="Apply",
+    click_dialog_button(
+        dialog,
+        "Apply",
     )
-
-    if apply_button.count() == 0:
-        raise RuntimeError(
-            "Could not find the Owner SD Apply button."
-        )
-
-    apply_button.first.click()
 
     page.wait_for_timeout(10_000)
 
@@ -1220,17 +1262,25 @@ def main() -> None:
                 )
             )
 
-            send_message(
+            owner_summary = (
                 "SB Calls Monitor started. "
                 f"Found {len(owner_values)} "
                 "Owner SD values: "
                 + ", ".join(owner_values)
             )
 
+            if len(owner_summary) > 4000:
+                owner_summary = (
+                    "SB Calls Monitor started. "
+                    f"Found {len(owner_values)} "
+                    "Owner SD values."
+                )
+
+            send_message(owner_summary)
+
             for owner_value in owner_values:
                 try:
-                    # Reload the dashboard for a clean
-                    # filter state on every iteration.
+                    # Reload dashboard for a clean filter state.
                     open_dashboard(page)
 
                     select_owner_sd(
