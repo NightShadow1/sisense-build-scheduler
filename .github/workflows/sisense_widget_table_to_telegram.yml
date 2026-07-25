@@ -1,26 +1,18 @@
-name: Sisense Widget Table -> Telegram (Screenshot)
+name: Test SB Calls Widgets
 
 on:
-  schedule:
-    # GitHub Actions cron is UTC
-    - cron: "0 9 * * *"
-    - cron: "0 21 * * *"
-  workflow_dispatch: {}
-
-concurrency:
-  group: sisense-widget-to-telegram
-  cancel-in-progress: true
+  workflow_dispatch:
 
 jobs:
-  send_widget_screenshot:
+  send_widgets:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 40
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -31,14 +23,44 @@ jobs:
           pip install requests playwright
           python -m playwright install --with-deps chromium
 
-      - name: Send widget screenshot to Telegram
+      - name: Validate Python syntax
+        run: |
+          python -m py_compile sisense_widget_to_telegram.py
+
+      - name: Validate required secrets
         env:
-          SISENSE_BASE_URL: "https://projectanalytics.sisense.com"
           SISENSE_USER: ${{ secrets.SISENSE_USER }}
           SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          SBCALLSM_BOT_TOKEN: ${{ secrets.SBCALLSM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          DASHBOARD_ID: "696ea5f74226499f3206be3f"
-          WIDGET_ID: "696ea8254226499f3206be41"
+        run: |
+          test -n "$SISENSE_USER" || {
+            echo "ERROR: SISENSE_USER secret is missing"
+            exit 1
+          }
+
+          test -n "$SISENSE_PASS" || {
+            echo "ERROR: SISENSE_PASS secret is missing"
+            exit 1
+          }
+
+          test -n "$SBCALLSM_BOT_TOKEN" || {
+            echo "ERROR: SBCALLSM_BOT_TOKEN secret is missing"
+            exit 1
+          }
+
+          test -n "$TELEGRAM_CHAT_ID" || {
+            echo "ERROR: TELEGRAM_CHAT_ID secret is missing"
+            exit 1
+          }
+
+          echo "All required secrets are available."
+
+      - name: Send widget screenshots to Telegram
+        env:
+          SISENSE_USER: ${{ secrets.SISENSE_USER }}
+          SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
+          SBCALLSM_BOT_TOKEN: ${{ secrets.SBCALLSM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python sisense_widget_to_telegram.py
