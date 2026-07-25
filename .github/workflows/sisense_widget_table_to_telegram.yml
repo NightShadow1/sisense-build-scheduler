@@ -3,6 +3,10 @@ name: Test SB Calls Widgets
 on:
   workflow_dispatch:
 
+concurrency:
+  group: sb-calls-owner-widgets
+  cancel-in-progress: true
+
 jobs:
   send_widgets:
     runs-on: ubuntu-latest
@@ -35,28 +39,28 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           test -n "$SISENSE_USER" || {
-            echo "ERROR: SISENSE_USER secret is missing"
+            echo "ERROR: SISENSE_USER is missing"
             exit 1
           }
 
           test -n "$SISENSE_PASS" || {
-            echo "ERROR: SISENSE_PASS secret is missing"
+            echo "ERROR: SISENSE_PASS is missing"
             exit 1
           }
 
           test -n "$SBCALLSM_BOT_TOKEN" || {
-            echo "ERROR: SBCALLSM_BOT_TOKEN secret is missing"
+            echo "ERROR: SBCALLSM_BOT_TOKEN is missing"
             exit 1
           }
 
           test -n "$TELEGRAM_CHAT_ID" || {
-            echo "ERROR: TELEGRAM_CHAT_ID secret is missing"
+            echo "ERROR: TELEGRAM_CHAT_ID is missing"
             exit 1
           }
 
           echo "All required secrets are available."
 
-      - name: Send widget screenshots to Telegram
+      - name: Send non-empty Owner SD widgets
         env:
           SISENSE_USER: ${{ secrets.SISENSE_USER }}
           SISENSE_PASS: ${{ secrets.SISENSE_PASS }}
