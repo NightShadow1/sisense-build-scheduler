@@ -1,16 +1,23 @@
-name: Test SB Calls Widgets
+name: SB Calls Daily Widgets
 
 on:
   workflow_dispatch:
 
+  schedule:
+    - cron: "0 9 * * *"
+      timezone: "Europe/Belgrade"
+
+permissions:
+  contents: read
+
 concurrency:
-  group: sb-calls-owner-widgets
+  group: sb-calls-daily-widgets
   cancel-in-progress: true
 
 jobs:
   send_widgets:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
