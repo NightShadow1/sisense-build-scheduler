@@ -16,6 +16,11 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 CHAIN_INTERVAL_SECONDS = 60 * 60
 
+# Small cubes are triggered in pairs.
+# Both cubes in a pair start first, then the scheduler waits for both
+# before starting the next pair.
+SMALL_CUBE_BATCH_SIZE = 2
+
 FAST_CUBES = [
     {"id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9", "name": "SB BID[6,11,18,26,35]", "buildType": "full"},
     {"id": "e1110242-decf-4fe5-a3b2-fd934c53650d", "name": "SB AI Ret", "buildType": "full"},
@@ -31,14 +36,25 @@ FAST_CUBES = [
     {"id": "c9e56405-b0ac-446e-97c0-64dd787f5517", "name": "WF BID[42,43,44]", "buildType": "full"},
 ]
 
+# These cubes remain sequential and critical.
+# If one fails, the remaining big cubes and post-big cubes are skipped,
+# preserving the existing behaviour.
 BIG_CUBES = [
     {"id": "271c0e9b-7ead-486e-9a05-7699273226c3", "name": "DWH&Crm_Sites", "buildType": "full"},
     {"id": "c36b8200-2db5-43aa-84aa-ea4843478a8e", "name": "Modernized DWH&Crm_Sites", "buildType": "full"},
     {"id": "5072195f-0b4b-4c8e-aba7-7f8ab1dc927c", "name": "Plan Overview", "buildType": "full"},
     {"id": "c8855636-6fc0-41e9-b4df-eba98c4d08d0", "name": "Plan Overview - Alex POC", "buildType": "full"},
-    {"id": "7c821f78-1837-4944-aec5-42ae1ebca7aa", "name": "FTD Tracker List", "buildType": "full"},
 ]
 
+# FTD Tracker runs after all big cubes.
+# Its failure is non-blocking: Sites Compare must still be attempted.
+FTD_TRACKER_CUBE = {
+    "id": "7c821f78-1837-4944-aec5-42ae1ebca7aa",
+    "name": "FTD Tracker List",
+    "buildType": "full",
+}
+
+# Sites Compare runs after FTD Tracker, even if FTD Tracker fails.
 FINAL_CUBE = {
     "id": "e808e919-8ea2-420d-8df6-5430566ac1af",
     "name": "Sites Compare",
@@ -84,7 +100,11 @@ def get_token() -> str:
     url = f"{BASE_URL}/api/v1/authentication/login"
     print(f"Logging in to {BASE_URL} ...")
 
-    resp = requests.post(url, data={"username": USERNAME, "password": PASSWORD})
+    resp = requests.post(
+        url,
+        data={"username": USERNAME, "password": PASSWORD},
+        timeout=30,
+    )
     resp.raise_for_status()
 
     data = resp.json()
@@ -115,13 +135,18 @@ def trigger_build(token: str, datamodel_id: str, build_type: str, cube_name: str
     print(f"Triggering build: {cube_name} ({datamodel_id}, type={build_type})")
 
     try:
-        resp = requests.post(url, json=body, headers=headers)
+        resp = requests.post(
+            url,
+            json=body,
+            headers=headers,
+            timeout=30,
+        )
         print("  -> HTTP status:", resp.status_code)
 
         if resp.status_code >= 300:
             msg = (
-                f"❌ Sisense build trigger FAILED for cube '{cube_name}' ({datamodel_id}). "
-                f"HTTP {resp.status_code}: {resp.text}"
+                f"❌ Sisense build trigger FAILED for cube '{cube_name}' "
+                f"({datamodel_id}). HTTP {resp.status_code}: {resp.text}"
             )
             print(msg)
             send_telegram_message(msg)
@@ -130,15 +155,27 @@ def trigger_build(token: str, datamodel_id: str, build_type: str, cube_name: str
         data = resp.json()
 
     except Exception as e:
-        msg = f"❌ Exception triggering build for cube '{cube_name}' ({datamodel_id}): {e}"
+        msg = (
+            f"❌ Exception triggering build for cube '{cube_name}' "
+            f"({datamodel_id}): {e}"
+        )
         print(msg)
         send_telegram_message(msg)
         return None
 
-    build_id = data.get("id") or data.get("oid") or data.get("_id") or str(data)
-    print(f"  -> buildId: {build_id}")
+    build_id = data.get("id") or data.get("oid") or data.get("_id")
 
-    return build_id
+    if not build_id:
+        msg = (
+            f"❌ Sisense did not return a build ID for cube '{cube_name}' "
+            f"({datamodel_id}). Response: {data}"
+        )
+        print(msg)
+        send_telegram_message(msg)
+        return None
+
+    print(f"  -> buildId: {build_id}")
+    return str(build_id)
 
 
 def wait_for_build(token: str, build_id: str) -> str:
@@ -166,16 +203,29 @@ def wait_for_build(token: str, build_id: str) -> str:
 
     while True:
         try:
-            resp = requests.get(url, headers=headers)
+            resp = requests.get(
+                url,
+                headers=headers,
+                timeout=30,
+            )
 
-            if resp.status_code == 400 and "Data source not found for build id" in resp.text:
-                print(f"  Build {build_id}: 400 'Data source not found', retrying...")
+            if (
+                resp.status_code == 400
+                and "Data source not found for build id" in resp.text
+            ):
+                print(
+                    f"  Build {build_id}: "
+                    "400 'Data source not found', retrying..."
+                )
 
             elif resp.status_code == 404:
                 print(f"  Build {build_id}: 404 Not Found yet, retrying...")
 
             elif resp.status_code >= 300:
-                print(f"  Error checking build {build_id}: {resp.status_code} {resp.text}")
+                print(
+                    f"  Error checking build {build_id}: "
+                    f"{resp.status_code} {resp.text}"
+                )
                 return "ERROR_HTTP"
 
             else:
@@ -193,10 +243,206 @@ def wait_for_build(token: str, build_id: str) -> str:
             return "ERROR_EXCEPTION"
 
         if time.time() > deadline:
-            print(f"  Build {build_id} timed out after {BUILD_TIMEOUT_MINUTES} minutes.")
+            print(
+                f"  Build {build_id} timed out after "
+                f"{BUILD_TIMEOUT_MINUTES} minutes."
+            )
             return "TIMEOUT"
 
         time.sleep(POLL_INTERVAL_SECONDS)
+
+
+# ============================================
+# CHAIN HELPERS
+# ============================================
+
+def split_into_batches(items, batch_size):
+    """Yield consecutive batches without dropping an odd final item."""
+    for start_index in range(0, len(items), batch_size):
+        yield items[start_index:start_index + batch_size]
+
+
+def run_fast_cubes_in_pairs(token: str):
+    """
+    Trigger two small cubes, wait until both finish, then start the next two.
+    A failure in one small cube does not prevent the remaining pairs from running.
+    """
+    print(
+        f"=== Batch 1: small cubes, "
+        f"{SMALL_CUBE_BATCH_SIZE} running at a time ==="
+    )
+
+    batches = list(split_into_batches(FAST_CUBES, SMALL_CUBE_BATCH_SIZE))
+
+    for batch_number, cube_batch in enumerate(batches, start=1):
+        cube_names = ", ".join(cube["name"] for cube in cube_batch)
+
+        print(
+            f"\n--- Small-cube pair {batch_number}/{len(batches)}: "
+            f"{cube_names} ---"
+        )
+
+        triggered_builds = []
+
+        # Trigger every cube in this pair before waiting.
+        for cube in cube_batch:
+            build_id = trigger_build(
+                token,
+                cube["id"],
+                cube["buildType"],
+                cube["name"],
+            )
+            triggered_builds.append((cube, build_id))
+
+        # Wait for every successfully triggered cube in this pair.
+        for cube, build_id in triggered_builds:
+            cube_id = cube["id"]
+            cube_name = cube["name"]
+
+            if not build_id:
+                print(
+                    f"Skipping wait for {cube_name} ({cube_id}) "
+                    "because its trigger failed."
+                )
+                continue
+
+            print(f"\nWaiting for small cube {cube_name} ({cube_id})...")
+            status = wait_for_build(token, build_id)
+
+            print(f"Small cube {cube_name} finished with status: {status}")
+
+            if status not in SUCCESS_STATUSES:
+                send_telegram_message(
+                    f"❌ Sisense small cube '{cube_name}' "
+                    f"finished with status: {status}"
+                )
+
+        print(
+            f"\nSmall-cube pair {batch_number}/{len(batches)} finished. "
+            "Moving to the next pair."
+        )
+
+
+def run_critical_big_cubes(token: str) -> bool:
+    """
+    Run the main big cubes one by one.
+    Returns False immediately if a big cube cannot be triggered or fails.
+    """
+    print("\n=== Batch 2: critical big cubes sequential ===")
+
+    for cube in BIG_CUBES:
+        cube_id = cube["id"]
+        cube_name = cube["name"]
+        build_type = cube["buildType"]
+
+        print(f"\nStarting big cube {cube_name} ({cube_id})...")
+
+        build_id = trigger_build(
+            token,
+            cube_id,
+            build_type,
+            cube_name,
+        )
+
+        if not build_id:
+            send_telegram_message(
+                f"❌ Could not trigger big cube '{cube_name}' ({cube_id}). "
+                "Stopping the critical big-cube batch and skipping "
+                "FTD Tracker and Sites Compare."
+            )
+            return False
+
+        status = wait_for_build(token, build_id)
+
+        print(f"Big cube {cube_name} finished with status: {status}")
+
+        if status not in SUCCESS_STATUSES:
+            send_telegram_message(
+                f"❌ Big cube '{cube_name}' finished with status: {status}. "
+                "Stopping the critical big-cube batch and skipping "
+                "FTD Tracker and Sites Compare."
+            )
+            return False
+
+    return True
+
+
+def run_non_blocking_ftd_tracker(token: str):
+    """
+    Run FTD Tracker after the main big cubes.
+    Any trigger failure, build failure, error, or timeout is reported,
+    but Sites Compare will still run afterward.
+    """
+    cube = FTD_TRACKER_CUBE
+    cube_id = cube["id"]
+    cube_name = cube["name"]
+    build_type = cube["buildType"]
+
+    print("\n=== Batch 3: FTD Tracker, non-blocking ===")
+    print(f"\nStarting {cube_name} ({cube_id})...")
+
+    build_id = trigger_build(
+        token,
+        cube_id,
+        build_type,
+        cube_name,
+    )
+
+    if not build_id:
+        print(
+            f"{cube_name} could not be triggered. "
+            "Continuing to Sites Compare."
+        )
+        send_telegram_message(
+            f"❌ Could not trigger '{cube_name}' ({cube_id}). "
+            "The scheduler will continue with Sites Compare."
+        )
+        return
+
+    status = wait_for_build(token, build_id)
+
+    print(f"{cube_name} finished with status: {status}")
+
+    if status not in SUCCESS_STATUSES:
+        send_telegram_message(
+            f"❌ Sisense cube '{cube_name}' finished with status: {status}. "
+            "The scheduler will continue with Sites Compare."
+        )
+    else:
+        print(f"{cube_name} succeeded. Continuing to Sites Compare.")
+
+
+def run_sites_compare(token: str):
+    """Run Sites Compare after the FTD Tracker attempt."""
+    cube_id = FINAL_CUBE["id"]
+    cube_name = FINAL_CUBE["name"]
+    build_type = FINAL_CUBE["buildType"]
+
+    print("\n=== Batch 4: Sites Compare ===")
+    print(f"\nStarting final cube {cube_name} ({cube_id})...")
+
+    build_id = trigger_build(
+        token,
+        cube_id,
+        build_type,
+        cube_name,
+    )
+
+    if not build_id:
+        send_telegram_message(
+            f"❌ Could not trigger final cube '{cube_name}' ({cube_id})"
+        )
+        return
+
+    status = wait_for_build(token, build_id)
+
+    print(f"Final cube {cube_name} finished with status: {status}")
+
+    if status not in SUCCESS_STATUSES:
+        send_telegram_message(
+            f"❌ Sisense final cube '{cube_name}' "
+            f"finished with status: {status}"
+        )
 
 
 # ============================================
@@ -209,92 +455,26 @@ def run_chain():
     print("Got token.")
     print("==============================")
 
-    # Batch 1: fast cubes parallel trigger
-    print("=== Batch 1: fast cubes ===")
+    # 1. Small cubes: exactly two active builds at a time.
+    run_fast_cubes_in_pairs(token)
 
-    fast_build_ids = []
+    # 2. Main big cubes: sequential and critical.
+    all_big_ok = run_critical_big_cubes(token)
 
-    for cube in FAST_CUBES:
-        build_id = trigger_build(
-            token,
-            cube["id"],
-            cube["buildType"],
-            cube["name"]
+    if not all_big_ok:
+        print(
+            "\nSkipping FTD Tracker and Sites Compare because "
+            "the critical big-cube batch did not fully succeed."
         )
-        fast_build_ids.append((cube["id"], cube["name"], build_id))
+        print("\nChain finished.")
+        return
 
-    for cube_id, cube_name, build_id in fast_build_ids:
-        if not build_id:
-            print(f"Skipping wait for {cube_name} ({cube_id}) because trigger failed.")
-            continue
+    # 3. FTD Tracker: sequential but non-blocking.
+    run_non_blocking_ftd_tracker(token)
 
-        print(f"\nWaiting for fast cube {cube_name} ({cube_id})...")
-        status = wait_for_build(token, build_id)
-
-        print(f"Fast cube {cube_name} finished with status: {status}")
-
-        if status not in SUCCESS_STATUSES:
-            send_telegram_message(f"❌ Sisense cube '{cube_name}' finished with status: {status}")
-
-    # Batch 2: big cubes sequential
-    print("\n=== Batch 2: big cubes sequential ===")
-
-    all_big_ok = True
-
-    for cube in BIG_CUBES:
-        cube_id = cube["id"]
-        cube_name = cube["name"]
-        build_type = cube["buildType"]
-
-        print(f"\nStarting big cube {cube_name} ({cube_id})...")
-
-        build_id = trigger_build(token, cube_id, build_type, cube_name)
-
-        if not build_id:
-            send_telegram_message(
-                f"❌ Could not trigger big cube '{cube_name}' ({cube_id}). "
-                f"Stopping Batch 2 and skipping Sites Compare."
-            )
-            all_big_ok = False
-            break
-
-        status = wait_for_build(token, build_id)
-
-        print(f"Big cube {cube_name} finished with status: {status}")
-
-        if status not in SUCCESS_STATUSES:
-            send_telegram_message(
-                f"❌ Big cube '{cube_name}' finished with status: {status}. "
-                f"Stopping Batch 2 and skipping Sites Compare."
-            )
-            all_big_ok = False
-            break
-
-    # Batch 3: final cube
-    if all_big_ok:
-        print("\n=== Batch 3: final quick cube ===")
-
-        cube_id = FINAL_CUBE["id"]
-        cube_name = FINAL_CUBE["name"]
-        build_type = FINAL_CUBE["buildType"]
-
-        print(f"\nStarting final cube {cube_name} ({cube_id})...")
-
-        build_id = trigger_build(token, cube_id, build_type, cube_name)
-
-        if build_id:
-            status = wait_for_build(token, build_id)
-
-            print(f"Final cube {cube_name} finished with status: {status}")
-
-            if status not in SUCCESS_STATUSES:
-                send_telegram_message(
-                    f"❌ Sisense final cube '{cube_name}' finished with status: {status}"
-                )
-        else:
-            send_telegram_message(f"❌ Could not trigger final cube '{cube_name}' ({cube_id})")
-    else:
-        print("\nSkipping Batch 3 because Batch 2 did not fully succeed.")
+    # 4. Sites Compare: always attempted after FTD Tracker,
+    # even when FTD Tracker failed.
+    run_sites_compare(token)
 
     print("\nChain finished.")
 
@@ -325,8 +505,9 @@ if __name__ == "__main__":
 
         if remaining_wait > 0:
             print(
-                f"\nChain finished before 1 hour. "
-                f"Waiting {remaining_wait / 60:.1f} minutes before next chain start."
+                "\nChain finished before 1 hour. "
+                f"Waiting {remaining_wait / 60:.1f} minutes "
+                "before next chain start."
             )
             time.sleep(remaining_wait)
         else:
