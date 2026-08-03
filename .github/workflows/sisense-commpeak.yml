@@ -8,7 +8,7 @@ on:
   workflow_dispatch: {}
 
 concurrency:
-  group: sisense-commpeak-chain
+  group: sisense-global-build-lock
   cancel-in-progress: false
 
 jobs:
