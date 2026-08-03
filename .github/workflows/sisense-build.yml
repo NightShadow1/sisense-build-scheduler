@@ -6,7 +6,7 @@ on:
   workflow_dispatch: {}       # allow manual runs
 
 concurrency:
-  group: sisense-build-chain
+  group: sisense-global-build-lock
   cancel-in-progress: false
 
 jobs:
