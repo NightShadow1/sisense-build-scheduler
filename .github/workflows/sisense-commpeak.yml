@@ -3,7 +3,8 @@ name: Sisense Commpeak loop
 on:
   # 🔁 Every 30 minutes
   schedule:
-    - cron: "0 6,18 * * *"
+    - cron: "0 18 * * *"
+      timezone: "Europe/Belgrade"
   # Manual runs allowed
   workflow_dispatch: {}
 
