@@ -3,10 +3,6 @@ name: SB Calls Daily Widgets
 on:
   workflow_dispatch:
 
-  schedule:
-    - cron: "7 9 * * *"
-      timezone: "Europe/Belgrade"
-
 permissions:
   contents: read
 
