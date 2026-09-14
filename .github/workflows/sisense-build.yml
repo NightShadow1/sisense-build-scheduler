@@ -1,14 +1,7 @@
 name: Sisense build chain
 
 on:
-  schedule:
-    # Every hour at :15, except 18:15
-    - cron: "15 0-17 * * *"
-      timezone: "Europe/Belgrade"
-
-    - cron: "15 19-23 * * *"
-      timezone: "Europe/Belgrade"
-
+ 
   workflow_dispatch: {}
 
 concurrency:
