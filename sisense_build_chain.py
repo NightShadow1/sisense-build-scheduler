@@ -19,7 +19,7 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 # Small cubes are triggered in pairs.
 # Both cubes in a pair start first, then the scheduler waits for both
 # before starting the next pair.
-SMALL_CUBE_BATCH_SIZE = 2
+SMALL_CUBE_BATCH_SIZE = 4
 
 FAST_CUBES = [
     {
