@@ -1,11 +1,6 @@
 name: Sisense Commpeak loop
 
 on:
-  schedule:
-    # Once per day at 18:00 Belgrade time
-    - cron: "0 18 * * *"
-      timezone: "Europe/Belgrade"
-
   workflow_dispatch: {}
 
 concurrency:
@@ -22,31 +17,34 @@ jobs:
       MAINTENANCE_MODE_COMMPEAK: ${{ secrets.MAINTENANCE_MODE_COMMPEAK }}
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
       TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-      # 🔥 Catch-up mode: up to 60 loops per run
+
+      # Catch-up mode: up to 60 loops per run
       MAX_LOOPS_PER_RUN: "60"
 
     steps:
-      # 👉 Skip ONLY Commpeak scheduled runs during Commpeak maintenance
-      - name: Maintenance mode – skipping scheduled Commpeak run
-        if: ${{ github.event_name == 'schedule' && env.MAINTENANCE_MODE_COMMPEAK == 'true' }}
-        run: echo "Commpeak maintenance is ON, skipping scheduled Commpeak loop."
+      - name: Maintenance mode – skipping Commpeak run
+        if: ${{ env.MAINTENANCE_MODE_COMMPEAK == 'true' }}
+        run: |
+          echo "Commpeak maintenance is ON."
+          echo "Skipping Commpeak loop."
 
       - name: Check out repository
-        if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE_COMMPEAK == 'true') }}
+        if: ${{ env.MAINTENANCE_MODE_COMMPEAK != 'true' }}
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE_COMMPEAK == 'true') }}
+        if: ${{ env.MAINTENANCE_MODE_COMMPEAK != 'true' }}
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
       - name: Install dependencies
-        if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE_COMMPEAK == 'true') }}
+        if: ${{ env.MAINTENANCE_MODE_COMMPEAK != 'true' }}
         run: |
           python -m pip install --upgrade pip
           pip install requests
 
       - name: Run Commpeak orchestrator
-        if: ${{ !(github.event_name == 'schedule' && env.MAINTENANCE_MODE_COMMPEAK == 'true') }}
-        run: python commpeak_orchestrator.py
+        if: ${{ env.MAINTENANCE_MODE_COMMPEAK != 'true' }}
+        run: |
+          python commpeak_orchestrator.py
