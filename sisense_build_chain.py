@@ -95,11 +95,6 @@ BIG_CUBES = [
         "buildType": "full",
     },
     {
-        "id": "c36b8200-2db5-43aa-84aa-ea4843478a8e",
-        "name": "Modernized DWH&Crm_Sites",
-        "buildType": "full",
-    },
-    {
         "id": "5072195f-0b4b-4c8e-aba7-7f8ab1dc927c",
         "name": "Plan Overview",
         "buildType": "full",
