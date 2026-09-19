@@ -27,11 +27,11 @@ FAST_CUBES = [
         "name": "SB BID[6,11,18,26,35]",
         "buildType": "full",
     },
-    {
-        "id": "e1110242-decf-4fe5-a3b2-fd934c53650d",
-        "name": "SB AI Ret",
-        "buildType": "full",
-    },
+    #{
+    #    "id": "e1110242-decf-4fe5-a3b2-fd934c53650d",
+    #    "name": "SB AI Ret",
+    #    "buildType": "full",
+    #},
     {
         "id": "64a0ca4c-a973-403f-ad1f-ee360319c3df",
         "name": "EQ BID[3,14]",
