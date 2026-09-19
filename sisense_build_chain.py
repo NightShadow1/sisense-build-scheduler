@@ -22,11 +22,11 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 SMALL_CUBE_BATCH_SIZE = 4
 
 FAST_CUBES = [
-    {
-        "id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9",
-        "name": "SB BID[6,11,18,26,35]",
-        "buildType": "full",
-    },
+    #{
+    #    "id": "c0c863ec-e96d-4456-9a9b-c0f97a8583b9",
+    #    "name": "SB BID[6,11,18,26,35]",
+    #    "buildType": "full",
+    #},
     #{
     #    "id": "e1110242-decf-4fe5-a3b2-fd934c53650d",
     #    "name": "SB AI Ret",
